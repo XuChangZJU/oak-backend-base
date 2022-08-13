@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "oak-backend-base",
   "main": "src/index",
+  "author": {
+      "name": "XuChang"
+  },
   "scripts": {
     "test": "ts-node test/test.ts",
     "build": "tsc"
@@ -14,13 +17,12 @@
     "lodash": "^4.17.21",
     "mysql": "^2.18.1",
     "mysql2": "^2.3.3",
-    "oak-db": "file:../oak-db",
-    "oak-domain": "file:../oak-domain",
-    "oak-general-business": "file:../oak-general-business",
-    "oak-common-aspect": "file:../oak-common-aspect",
+    "oak-db": "^1.0.0",
+    "oak-domain": "^1.0.0",
+    "oak-general-business": "^1.0.0",
+    "oak-common-aspect": "^1.0.0",
     "uuid": "^8.3.2"
   },
-  "author": "XuChang",
   "license": "ISC",
   "devDependencies": {
     "@types/koa": "^2.13.4",
