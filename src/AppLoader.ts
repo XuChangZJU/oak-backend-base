@@ -1,10 +1,11 @@
 import { analyzeActionDefDict } from "oak-domain/lib/store/actionDef";
+import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { AppLoader as GeneralAppLoader, Trigger, Checker, Aspect, RowStore, Context, EntityDict } from "oak-domain/lib/types";
 import { DbStore } from "./DbStore";
 import generalAspectDict from 'oak-common-aspect/lib/index';
 import { MySQLConfiguration } from 'oak-db/lib/MySQL/types/Configuration';
 
-function initTriggers<ED extends EntityDict, Cxt extends Context<ED>>(dbStore: DbStore<ED, Cxt>, path: string) {
+function initTriggers<ED extends EntityDict & BaseEntityDict, Cxt extends Context<ED>>(dbStore: DbStore<ED, Cxt>, path: string) {
     const { triggers } = require(`${path}/lib/triggers/index`);
     const { checkers } = require(`${path}/lib/checkers/index`);
     const { ActionDefDict } = require(`${path}/lib/oak-app-domain/ActionDefDict`);
@@ -25,7 +26,7 @@ function initTriggers<ED extends EntityDict, Cxt extends Context<ED>>(dbStore: D
 }
 
 
-export class AppLoader<ED extends EntityDict, Cxt extends Context<ED>> extends GeneralAppLoader<ED, Cxt> {
+export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Context<ED>> extends GeneralAppLoader<ED, Cxt> {
     private dbStore: DbStore<ED, Cxt>;
     private aspectDict: Record<string, Aspect<ED, Cxt>>;
     private contextBuilder: (scene?: string) => (store: RowStore<ED, Cxt>) => Cxt;
@@ -72,7 +73,10 @@ export class AppLoader<ED extends EntityDict, Cxt extends Context<ED>> extends G
             await this.dbStore.operate(entity as keyof ED, {
                 data: rows,
                 action: 'create',
-            } as any, context);
+            } as any, context, {
+                dontCollect: true,
+                dontCreateOper: true,
+            });
             console.log(`data in ${entity} initialized!`);
         }
         await context.commit();

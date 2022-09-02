@@ -1,6 +1,7 @@
+import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { AppLoader as GeneralAppLoader, RowStore, Context, EntityDict } from "oak-domain/lib/types";
 import { MySQLConfiguration } from 'oak-db/lib/MySQL/types/Configuration';
-export declare class AppLoader<ED extends EntityDict, Cxt extends Context<ED>> extends GeneralAppLoader<ED, Cxt> {
+export declare class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Context<ED>> extends GeneralAppLoader<ED, Cxt> {
     private dbStore;
     private aspectDict;
     private contextBuilder;
