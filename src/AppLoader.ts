@@ -1,4 +1,6 @@
 import { analyzeActionDefDict } from "oak-domain/lib/store/actionDef";
+import { createDynamicCheckers } from 'oak-domain/lib/checkers';
+import { createDynamicTriggers } from 'oak-domain/lib/triggers';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { AppLoader as GeneralAppLoader, Trigger, Checker, Aspect, RowStore, Context, EntityDict } from "oak-domain/lib/types";
 import { DbStore } from "./DbStore";
@@ -22,6 +24,16 @@ function initTriggers<ED extends EntityDict & BaseEntityDict, Cxt extends Contex
     );
     adCheckers.forEach(
         (checker) => dbStore.registerChecker(checker)
+    );
+
+    const dynamicCheckers = createDynamicCheckers(dbStore.getSchema());
+    dynamicCheckers.forEach(
+        (checker) => dbStore.registerChecker(checker)
+    );
+
+    const dynamicTriggers = createDynamicTriggers(dbStore.getSchema());
+    dynamicTriggers.forEach(
+        (trigger) => dbStore.registerTrigger(trigger)
     );
 }
 
