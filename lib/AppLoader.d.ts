@@ -5,7 +5,7 @@ export declare class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt exten
     private dbStore;
     private aspectDict;
     private contextBuilder;
-    constructor(path: string, contextBuilder: (scene?: string) => (store: RowStore<ED, Cxt>) => Cxt, dbConfig: MySQLConfiguration);
+    constructor(path: string, contextBuilder: (scene?: string) => (store: RowStore<ED, Cxt>) => Promise<Cxt>, dbConfig: MySQLConfiguration);
     mount(initialize?: true): Promise<void>;
     unmount(): Promise<void>;
     execAspect(name: string, context: Cxt, params?: any): Promise<any>;

@@ -41,8 +41,8 @@ function initTriggers<ED extends EntityDict & BaseEntityDict, Cxt extends Contex
 export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Context<ED>> extends GeneralAppLoader<ED, Cxt> {
     private dbStore: DbStore<ED, Cxt>;
     private aspectDict: Record<string, Aspect<ED, Cxt>>;
-    private contextBuilder: (scene?: string) => (store: RowStore<ED, Cxt>) => Cxt;
-    constructor(path: string, contextBuilder: (scene?: string) => (store: RowStore<ED, Cxt>) => Cxt, dbConfig: MySQLConfiguration) {
+    private contextBuilder: (scene?: string) => (store: RowStore<ED, Cxt>) => Promise<Cxt>;
+    constructor(path: string, contextBuilder: (scene?: string) => (store: RowStore<ED, Cxt>) => Promise<Cxt>, dbConfig: MySQLConfiguration) {
         super(path);
         const { storageSchema } = require(`${path}/lib/oak-app-domain/Storage`);
         this.aspectDict = Object.assign({}, generalAspectDict, require(`${path}/lib/aspects/index`).aspectDict);
@@ -74,7 +74,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Conte
         await this.dbStore.initialize(dropIfExists);
 
         const { data } = require(`${this.path}/lib/data/index`);
-        const context = this.contextBuilder()(this.dbStore);
+        const context = await this.contextBuilder()(this.dbStore);
         await context.begin();
         for (const entity in data) {
             let rows = data[entity];

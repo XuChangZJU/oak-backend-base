@@ -22,7 +22,6 @@
     "mysql2": "^2.3.3",
     "oak-db": "file:../oak-db",
     "oak-domain": "file:../oak-domain",
-    "oak-general-business": "file:../oak-general-business",
     "oak-common-aspect": "file:../oak-common-aspect",
     "uuid": "^8.3.2"
   },

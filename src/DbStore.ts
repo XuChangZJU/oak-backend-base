@@ -8,9 +8,9 @@ import { MySQLConfiguration, } from 'oak-db/lib/MySQL/types/Configuration';
 export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends Context<ED>> extends MysqlStore<ED, Cxt> {
     private executor: TriggerExecutor<ED, Cxt>;
 
-    constructor(storageSchema: StorageSchema<ED>, contextBuilder: (scene?: string) => (store: RowStore<ED, Cxt>) => Cxt, mysqlConfiguration: MySQLConfiguration) {
+    constructor(storageSchema: StorageSchema<ED>, contextBuilder: (scene?: string) => (store: RowStore<ED, Cxt>) => Promise<Cxt>, mysqlConfiguration: MySQLConfiguration) {
         super(storageSchema, mysqlConfiguration);
-        this.executor = new TriggerExecutor(async (scene) => contextBuilder(scene)(this));
+        this.executor = new TriggerExecutor((scene) => contextBuilder(scene)(this));
     }
 
 
