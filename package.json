@@ -20,9 +20,9 @@
     "lodash": "^4.17.21",
     "mysql": "^2.18.1",
     "mysql2": "^2.3.3",
-    "oak-db": "file:../oak-db",
-    "oak-domain": "file:../oak-domain",
-    "oak-common-aspect": "file:../oak-common-aspect",
+    "oak-db": "^1.0.2",
+    "oak-domain": "^1.1.8",
+    "oak-common-aspect": "^1.0.2",
     "uuid": "^8.3.2"
   },
   "license": "ISC",
