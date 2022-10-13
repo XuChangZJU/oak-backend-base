@@ -2,7 +2,7 @@
   "name": "oak-backend-base",
   "version": "1.0.7",
   "description": "oak-backend-base",
-  "main": "main/index",
+  "main": "src/index",
   "author": {
     "name": "XuChang"
   },
