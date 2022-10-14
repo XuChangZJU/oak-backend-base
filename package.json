@@ -2,7 +2,7 @@
   "name": "oak-backend-base",
   "version": "1.0.8",
   "description": "oak-backend-base",
-  "main": "src/index",
+  "main": "lib/index",
   "author": {
     "name": "XuChang"
   },
@@ -19,8 +19,8 @@
     "mysql": "^2.18.1",
     "mysql2": "^2.3.3",
     "oak-common-aspect": "1.0.5",
-    "oak-db": "file:../oak-db",
-    "oak-domain": "file:../oak-domain",
+    "oak-db": "^1.0.4",
+    "oak-domain": "^1.1.11",
     "uuid": "^8.3.2"
   },
   "license": "ISC",
