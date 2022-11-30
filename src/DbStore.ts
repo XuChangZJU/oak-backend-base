@@ -1,5 +1,5 @@
 import { MysqlStore, MySqlSelectOption, MysqlOperateOption } from 'oak-db';
-import { EntityDict, Context, StorageSchema,  Trigger, Checker,  RowStore } from 'oak-domain/lib/types';
+import { EntityDict, Context, StorageSchema, Trigger, Checker, RowStore, SelectOption } from 'oak-domain/lib/types';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { TriggerExecutor } from 'oak-domain/lib/store/TriggerExecutor';
 import { MySQLConfiguration, } from 'oak-db/lib/MySQL/types/Configuration';
@@ -79,6 +79,36 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncCo
 
         try {
             result = await super.select(entity, selection, context, option);
+        }
+        catch (err) {
+            await context.rollback();
+            throw err;
+        }
+        if (autoCommit) {
+            await context.commit();
+        }
+        return result;
+    }
+
+    async count<T extends keyof ED>(entity: T, selection: Pick<ED[T]['Selection'], 'filter' | 'count'>, context: Cxt, option: SelectOption): Promise<number> {
+        const autoCommit = !context.getCurrentTxnId();
+        let result;
+        if (autoCommit) {
+            await context.begin();
+        }
+        try {
+            const selection2 = Object.assign({
+                action: 'select',
+            }, selection) as ED[T]['Operation'];
+
+            if (!option.blockTrigger) {
+                await this.executor.preOperation(entity, selection2, context, option);
+            }
+            result = await super.count(entity, selection, context, option);
+            /*  count应该不存在后trigger吧
+            if (!option.blockTrigger) {
+                await this.executor.postOperation(entity, selection2, context, option);
+            } */
         }
         catch (err) {
             await context.rollback();
