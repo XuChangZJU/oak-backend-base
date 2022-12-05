@@ -26,21 +26,6 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncCo
         return result;
     }
 
-    protected async cascadeSelectAsync<T extends keyof ED>(entity: T, selection: ED[T]["Selection"], context: AsyncContext<ED>, option: MySqlSelectOption): Promise<Partial<ED[T]['Schema']>[]> {
-        const selection2 = Object.assign({
-            action: 'select',
-        }, selection) as ED[T]['Operation'];
-
-        if (!option.blockTrigger) {
-            await this.executor.preOperation(entity, selection2, context, option);
-        }
-        const result = await super.cascadeSelectAsync(entity, selection2, context, option);
-        if (!option.blockTrigger) {
-            await this.executor.postOperation(entity, selection2, context, option, result);
-        }
-        return result;
-    }
-
     async operate<T extends keyof ED>(
         entity: T,
         operation: ED[T]['Operation'],
@@ -77,8 +62,20 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncCo
         }
         let result: Partial<ED[T]['Schema']>[];
 
+        // select的trigger应加在根select之前，cascade的select不加处理
+        const selection2 = Object.assign({
+            action: 'select',
+        }, selection) as ED[T]['Operation'];
+
+        if (!option.blockTrigger) {
+            await this.executor.preOperation(entity, selection2, context, option);
+        }
         try {
             result = await super.select(entity, selection, context, option);
+
+            if (!option.blockTrigger) {
+                await this.executor.postOperation(entity, selection2, context, option, result);
+            }
         }
         catch (err) {
             await context.rollback();
