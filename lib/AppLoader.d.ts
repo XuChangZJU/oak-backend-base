@@ -13,4 +13,5 @@ export declare class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt exten
     execAspect(name: string, context: Cxt, params?: any): Promise<any>;
     initialize(dropIfExists?: boolean): Promise<void>;
     getStore(): DbStore<ED, Cxt>;
+    startWatchers(): void;
 }

@@ -2,7 +2,8 @@ import { analyzeActionDefDict } from "oak-domain/lib/store/actionDef";
 import { createDynamicCheckers } from 'oak-domain/lib/checkers';
 import { createDynamicTriggers } from 'oak-domain/lib/triggers';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
-import { AppLoader as GeneralAppLoader, Trigger, Checker, Aspect, RowStore, Context, EntityDict } from "oak-domain/lib/types";
+import { generateNewIdAsync } from 'oak-domain/lib/utils/uuid';
+import { AppLoader as GeneralAppLoader, Trigger, Checker, Aspect, RowStore, Context, EntityDict, Watcher, BBWatcher, WBWatcher } from "oak-domain/lib/types";
 import { DbStore } from "./DbStore";
 import generalAspectDict from 'oak-common-aspect/lib/index';
 import { MySQLConfiguration } from 'oak-db/lib/MySQL/types/Configuration';
@@ -36,6 +37,70 @@ function initTriggers<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncC
     dynamicTriggers.forEach(
         (trigger) => dbStore.registerTrigger(trigger)
     );
+}
+
+function startWatchers<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncContext<ED>>(
+    dbStore: DbStore<ED, Cxt>,
+    path: string,
+    contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>
+) {
+    const { watchers } = require(`${path}/lib/watchers/index`);
+    const { ActionDefDict } = require(`${path}/lib/oak-app-domain/ActionDefDict`);
+
+    const { watchers: adWatchers } = analyzeActionDefDict(dbStore.getSchema(), ActionDefDict);
+    const totalWatchers = (<Watcher<ED, keyof ED, Cxt>[]>watchers).concat(adWatchers);
+
+    let count = 0;
+    const doWatchers = async () => {
+        count++;
+        const start = Date.now();
+        const context = await contextBuilder()(dbStore);
+        for (const w of totalWatchers) {
+            await context.begin();
+            try {
+                if (w.hasOwnProperty('actionData')) {
+                    const { entity, action, filter, actionData } = <BBWatcher<ED, keyof ED>>w;
+                    const filter2 = typeof filter === 'function' ? filter() : filter;
+                    const data = typeof actionData === 'function' ? await (actionData as any)() : actionData;        // 这里有个奇怪的编译错误，不理解 by Xc
+                    const result = await dbStore.operate(entity, {
+                        id: await generateNewIdAsync(),
+                        action,
+                        data,
+                        filter: filter2
+                    }, context, {
+                        dontCollect: true,
+                    });
+
+                    console.log(`执行了watcher【${w.name}】，结果是：`, result);
+                }
+                else {
+                    const { entity, projection, fn, filter } = <WBWatcher<ED, keyof ED, Cxt>>w;
+                    const filter2 = typeof filter === 'function' ? await filter() : filter;
+                    const projection2 = typeof projection === 'function' ? await projection() : projection;
+                    const rows = await dbStore.select(entity, {
+                        data: projection2 as any,
+                        filter: filter2,
+                    }, context, {
+                        dontCollect: true,
+                        blockTrigger: true,
+                    });
+
+                    const result = await fn(context, rows);
+                    console.log(`执行了watcher【${w.name}】，结果是：`, result);
+                }
+                await context.commit();
+            }
+            catch (err) {
+                await context.rollback();
+                console.error(`执行了watcher【${w.name}】，发生错误：`, err);
+            }
+        }
+        const duration = Date.now() - start;
+        console.log(`第${count}次执行watchers，共执行${watchers.length}个，耗时${duration}毫秒`);
+
+        setTimeout(() => doWatchers(), 120000);
+    };
+    doWatchers();
 }
 
 
@@ -98,5 +163,9 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
 
     getStore(): DbStore<ED, Cxt> {
         return this.dbStore;
+    }
+
+    startWatchers() {
+        startWatchers(this.dbStore, this.path, this.contextBuilder);
     }
 }
