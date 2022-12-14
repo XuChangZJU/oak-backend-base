@@ -63,18 +63,19 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncCo
         let result: Partial<ED[T]['Schema']>[];
 
         // select的trigger应加在根select之前，cascade的select不加处理
-        const selection2 = Object.assign({
+        Object.assign(selection, {
             action: 'select',
-        }, selection) as ED[T]['Operation'];
+        });
 
         if (!option.blockTrigger) {
-            await this.executor.preOperation(entity, selection2, context, option);
+            await this.executor.preOperation(entity, selection as ED[T]['Operation'], context, option);
         }
         try {
             result = await super.select(entity, selection, context, option);
 
             if (!option.blockTrigger) {
-                await this.executor.postOperation(entity, selection2, context, option, result);
+                await this.executor.postOperation(entity, selection as ED[T]['Operation']
+                , context, option, result);
             }
         }
         catch (err) {
