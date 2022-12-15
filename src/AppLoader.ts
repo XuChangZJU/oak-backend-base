@@ -1,3 +1,4 @@
+import { scheduleJob } from 'node-schedule';
 import { analyzeActionDefDict } from "oak-domain/lib/store/actionDef";
 import { createDynamicCheckers } from 'oak-domain/lib/checkers';
 import { createDynamicTriggers } from 'oak-domain/lib/triggers';
@@ -10,8 +11,8 @@ import { MySQLConfiguration } from 'oak-db/lib/MySQL/types/Configuration';
 import { AsyncContext } from "oak-domain/lib/store/AsyncRowStore";
 
 function initTriggers<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncContext<ED>>(dbStore: DbStore<ED, Cxt>, path: string) {
-    const { triggers } = require(`${path}/lib/triggers/index`);
-    const { checkers } = require(`${path}/lib/checkers/index`);
+    const triggers = require(`${path}/lib/triggers/index`);
+    const checkers = require(`${path}/lib/checkers/index`);
     const { ActionDefDict } = require(`${path}/lib/oak-app-domain/ActionDefDict`);
 
     const { triggers: adTriggers, checkers: adCheckers } = analyzeActionDefDict(dbStore.getSchema(), ActionDefDict);
@@ -44,7 +45,7 @@ function startWatchers<ED extends EntityDict & BaseEntityDict, Cxt extends Async
     path: string,
     contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>
 ) {
-    const { watchers } = require(`${path}/lib/watchers/index`);
+    const watchers = require(`${path}/lib/watchers/index`);
     const { ActionDefDict } = require(`${path}/lib/oak-app-domain/ActionDefDict`);
 
     const { watchers: adWatchers } = analyzeActionDefDict(dbStore.getSchema(), ActionDefDict);
@@ -139,7 +140,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
     async initialize(dropIfExists?: boolean) {
         await this.dbStore.initialize(dropIfExists);
 
-        const { data } = require(`${this.path}/lib/data/index`);
+        const data = require(`${this.path}/lib/data/index`);
         const context = await this.contextBuilder()(this.dbStore);
         await context.begin();
         for (const entity in data) {
@@ -167,5 +168,46 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
 
     startWatchers() {
         startWatchers(this.dbStore, this.path, this.contextBuilder);
+    }
+
+    startTimers() {
+        const timers = require(`${this.path}/lib/timer/index`);
+        for (const timer of timers) {
+            const { cron, fn, name } = timer;
+            scheduleJob(name, cron, async (date) => {
+                const start = Date.now();
+                const context = await this.contextBuilder()(this.dbStore);
+                await context.begin();
+                console.log(`定时器【${name}】开始执行，时间是【${date.toLocaleTimeString()}】`);
+                try {
+                    const result = await fn(context);
+                    console.log(`定时器【${name}】执行完成，耗时${Date.now() - start}毫秒，结果是【${result}】`);
+                    await context.commit();
+                }
+                catch(err) {
+                    console.warn(`定时器【${name}】执行失败，耗时${Date.now() - start}毫秒，错误是`, err);
+                    await context.rollback();
+                }
+            })
+        }
+    }
+
+    async execStartRoutines() {
+        const routines = require(`${this.path}/lib/routines/start`);
+        for (const routine of routines) {
+            const { name, fn } = routine;
+            const context = await this.contextBuilder()(this.dbStore);        
+            const start = Date.now();
+            await context.begin();
+            try {
+                const result = await fn(context);
+                console.log(`例程【${name}】执行完成，耗时${Date.now() - start}毫秒，结果是【${result}】`);
+                await context.commit();
+            }
+            catch (err) {
+                console.warn(`例程【${name}】执行失败，耗时${Date.now() - start}毫秒，错误是`, err);
+                await context.rollback();
+            }
+        }
     }
 }

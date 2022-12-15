@@ -15,9 +15,11 @@
     "build": "tsc && npm run copy-files"
   },
   "dependencies": {
+    "@types/node-schedule": "^2.1.0",
     "lodash": "^4.17.21",
     "mysql": "^2.18.1",
     "mysql2": "^2.3.3",
+    "node-schedule": "^2.1.0",
     "oak-common-aspect": "file:../oak-common-aspect",
     "oak-db": "file:../oak-db",
     "oak-domain": "file:../oak-domain",
