@@ -11,8 +11,8 @@ import { MySQLConfiguration } from 'oak-db/lib/MySQL/types/Configuration';
 import { AsyncContext } from "oak-domain/lib/store/AsyncRowStore";
 
 function initTriggers<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncContext<ED>>(dbStore: DbStore<ED, Cxt>, path: string) {
-    const triggers = require(`${path}/lib/triggers/index`);
-    const checkers = require(`${path}/lib/checkers/index`);
+    const triggers = require(`${path}/lib/triggers/index`).default;
+    const checkers = require(`${path}/lib/checkers/index`).default;
     const { ActionDefDict } = require(`${path}/lib/oak-app-domain/ActionDefDict`);
 
     const { triggers: adTriggers, checkers: adCheckers } = analyzeActionDefDict(dbStore.getSchema(), ActionDefDict);
@@ -45,7 +45,7 @@ function startWatchers<ED extends EntityDict & BaseEntityDict, Cxt extends Async
     path: string,
     contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>
 ) {
-    const watchers = require(`${path}/lib/watchers/index`);
+    const watchers = require(`${path}/lib/watchers/index`).default;
     const { ActionDefDict } = require(`${path}/lib/oak-app-domain/ActionDefDict`);
 
     const { watchers: adWatchers } = analyzeActionDefDict(dbStore.getSchema(), ActionDefDict);
@@ -112,7 +112,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
     constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, dbConfig: MySQLConfiguration) {
         super(path);
         const { storageSchema } = require(`${path}/lib/oak-app-domain/Storage`);
-        this.aspectDict = Object.assign({}, generalAspectDict, require(`${path}/lib/aspects/index`));
+        this.aspectDict = Object.assign({}, generalAspectDict, require(`${path}/lib/aspects/index`).default);
         this.dbStore = new DbStore<ED, Cxt>(storageSchema, contextBuilder, dbConfig);
         this.contextBuilder = contextBuilder;
     }
@@ -140,7 +140,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
     async initialize(dropIfExists?: boolean) {
         await this.dbStore.initialize(dropIfExists);
 
-        const data = require(`${this.path}/lib/data/index`);
+        const data = require(`${this.path}/lib/data/index`).default;
         const context = await this.contextBuilder()(this.dbStore);
         await context.begin();
         for (const entity in data) {
@@ -171,7 +171,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
     }
 
     startTimers() {
-        const timers = require(`${this.path}/lib/timer/index`);
+        const timers = require(`${this.path}/lib/timer/index`).default;
         for (const timer of timers) {
             const { cron, fn, name } = timer;
             scheduleJob(name, cron, async (date) => {
@@ -193,7 +193,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
     }
 
     async execStartRoutines() {
-        const routines = require(`${this.path}/lib/routines/start`);
+        const routines = require(`${this.path}/lib/routines/start`).default;
         for (const routine of routines) {
             const { name, fn } = routine;
             const context = await this.contextBuilder()(this.dbStore);        
