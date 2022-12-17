@@ -112,7 +112,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
     constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, dbConfig: MySQLConfiguration) {
         super(path);
         const { storageSchema } = require(`${path}/lib/oak-app-domain/Storage`);
-        this.aspectDict = Object.assign({}, generalAspectDict, require(`${path}/lib/aspects/index`).aspectDict);
+        this.aspectDict = Object.assign({}, generalAspectDict, require(`${path}/lib/aspects/index`));
         this.dbStore = new DbStore<ED, Cxt>(storageSchema, contextBuilder, dbConfig);
         this.contextBuilder = contextBuilder;
     }
