@@ -171,7 +171,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
     }
 
     startTimers() {
-        const timers = require(`${this.path}/lib/timer/index`).default;
+        const timers = require(`${this.path}/lib/timers/index`).default;
         for (const timer of timers) {
             const { cron, fn, name } = timer;
             scheduleJob(name, cron, async (date) => {
