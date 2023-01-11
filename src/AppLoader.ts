@@ -6,7 +6,7 @@ import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { generateNewIdAsync } from 'oak-domain/lib/utils/uuid';
 import { AppLoader as GeneralAppLoader, Trigger, Checker, Aspect, RowStore, Context, EntityDict, Watcher, BBWatcher, WBWatcher } from "oak-domain/lib/types";
 import { DbStore } from "./DbStore";
-import generalAspectDict from 'oak-common-aspect/lib/index';
+import generalAspectDict, { clearPorts, registerPorts } from 'oak-common-aspect/lib/index';
 import { MySQLConfiguration } from 'oak-db/lib/MySQL/types/Configuration';
 import { AsyncContext } from "oak-domain/lib/store/AsyncRowStore";
 
@@ -122,10 +122,13 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
         if (!initialize) {
             initTriggers(this.dbStore, path);
         }
+        const { importations, exportations } = require(`${path}/lib/ports/index`);
+        registerPorts(importations || [], exportations || []);
         this.dbStore.connect();
     }
 
     async unmount() {
+        clearPorts();
         this.dbStore.disconnect();
     }
 
