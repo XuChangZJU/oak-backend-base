@@ -152,14 +152,16 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
                 //  对area暂时处理一下
                 rows = require('./data/area.json');
             }
-            await this.dbStore.operate(entity as keyof ED, {
-                data: rows,
-                action: 'create',
-            } as any, context, {
-                dontCollect: true,
-                dontCreateOper: true,
-            });
-            console.log(`data in ${entity} initialized!`);
+            if (rows.length > 0) {
+                await this.dbStore.operate(entity as keyof ED, {
+                    data: rows,
+                    action: 'create',
+                } as any, context, {
+                    dontCollect: true,
+                    dontCreateOper: true,
+                });
+                console.log(`data in ${entity} initialized!`);
+            }
         }
         await context.commit();
         this.dbStore.disconnect();
