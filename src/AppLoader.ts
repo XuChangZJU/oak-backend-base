@@ -174,7 +174,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
     }
 
     getEndpoints(): Record<string, Endpoint<ED, Cxt>> {
-        const endpoints = require(`${this.path}/lib/endpoints/index`);
+        const endpoints = require(`${this.path}/lib/endpoints/index`).default;
         return endpoints;
     }
 
