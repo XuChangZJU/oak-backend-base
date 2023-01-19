@@ -13,6 +13,7 @@ import { AsyncContext } from "oak-domain/lib/store/AsyncRowStore";
 function initTriggers<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncContext<ED>>(dbStore: DbStore<ED, Cxt>, path: string) {
     const triggers = require(`${path}/lib/triggers/index`).default;
     const checkers = require(`${path}/lib/checkers/index`).default;
+    const authDict = require(`${path}/lib/auth/index`).default;
     const { ActionDefDict } = require(`${path}/lib/oak-app-domain/ActionDefDict`);
 
     const { triggers: adTriggers, checkers: adCheckers } = analyzeActionDefDict(dbStore.getSchema(), ActionDefDict);
@@ -29,7 +30,7 @@ function initTriggers<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncC
         (checker) => dbStore.registerChecker(checker)
     );
 
-    const dynamicCheckers = createDynamicCheckers(dbStore.getSchema());
+    const dynamicCheckers = createDynamicCheckers(dbStore.getSchema(), authDict);
     dynamicCheckers.forEach(
         (checker) => dbStore.registerChecker(checker)
     );
@@ -77,7 +78,7 @@ function startWatchers<ED extends EntityDict & BaseEntityDict, Cxt extends Async
                 else {
                     const { entity, projection, fn, filter } = <WBWatcher<ED, keyof ED, Cxt>>w;
                     const filter2 = typeof filter === 'function' ? await filter() : filter;
-                    const projection2 = typeof projection === 'function' ? await projection() : projection;
+                    const projection2 = typeof projection === 'function' ? await (projection as Function)() : projection;
                     const rows = await dbStore.select(entity, {
                         data: projection2 as any,
                         filter: filter2,
