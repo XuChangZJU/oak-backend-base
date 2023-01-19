@@ -9,6 +9,7 @@ import { DbStore } from "./DbStore";
 import generalAspectDict, { clearPorts, registerPorts } from 'oak-common-aspect/lib/index';
 import { MySQLConfiguration } from 'oak-db/lib/MySQL/types/Configuration';
 import { AsyncContext } from "oak-domain/lib/store/AsyncRowStore";
+import { Endpoint } from 'oak-domain/lib/types/Endpoint';
 
 function initTriggers<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncContext<ED>>(dbStore: DbStore<ED, Cxt>, path: string) {
     const triggers = require(`${path}/lib/triggers/index`).default;
@@ -170,6 +171,11 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
 
     getStore(): DbStore<ED, Cxt> {
         return this.dbStore;
+    }
+
+    getEndpoints(): Record<string, Endpoint<ED, Cxt>> {
+        const endpoints = require(`${this.path}/lib/endpoints/index`);
+        return endpoints;
     }
 
     startWatchers() {
