@@ -1,6 +1,6 @@
 {
   "name": "oak-backend-base",
-  "version": "2.3.2",
+  "version": "2.3.3",
   "description": "oak-backend-base",
   "main": "lib/index",
   "author": {
@@ -20,9 +20,9 @@
     "mysql": "^2.18.1",
     "mysql2": "^2.3.3",
     "node-schedule": "^2.1.0",
-    "oak-common-aspect": "^2.1.4",
-    "oak-db": "^2.2.2",
-    "oak-domain": "^2.4.0",
+    "oak-common-aspect": "file:../oak-common-aspect",
+    "oak-db": "file:../oak-db",
+    "oak-domain": "file:../oak-domain",
     "uuid": "^8.3.2"
   },
   "license": "ISC",
