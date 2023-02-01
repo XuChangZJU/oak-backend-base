@@ -19,7 +19,7 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncCo
         if (!option.blockTrigger) {
             await this.executor.preOperation(entity, operation, context, option);
         }
-        const result = super.cascadeUpdateAsync(entity, operation, context, option);
+        const result = await super.cascadeUpdateAsync(entity, operation, context, option);
         if (!option.blockTrigger) {
             await this.executor.postOperation(entity, operation, context, option);
         }
