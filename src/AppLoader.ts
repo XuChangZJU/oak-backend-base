@@ -58,6 +58,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
         );
         const inter = intersection(Object.keys(sthOut), Object.keys(sth));
         assert(inter.length === 0, `项目${filePath}中的default输出与第三方库中的输出在键值${inter.join(',')}上冲突，请处理`);
+        Object.assign(sthOut, sth);
         return sthOut;
     }
 
