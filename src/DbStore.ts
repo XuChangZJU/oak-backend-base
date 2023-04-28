@@ -1,24 +1,72 @@
 import { MysqlStore, MySqlSelectOption, MysqlOperateOption } from 'oak-db';
-import { EntityDict, Context, StorageSchema, Trigger, Checker, RowStore, SelectOption } from 'oak-domain/lib/types';
+import { EntityDict, Context, StorageSchema, Trigger, Checker, RowStore, SelectOption, AuthCascadePath } from 'oak-domain/lib/types';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { TriggerExecutor } from 'oak-domain/lib/store/TriggerExecutor';
 import { MySQLConfiguration, } from 'oak-db/lib/MySQL/types/Configuration';
 import { AsyncContext, AsyncRowStore } from 'oak-domain/lib/store/AsyncRowStore';
+import { RelationAuth } from 'oak-domain/lib/store/RelationAuth';
 
 
 export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncContext<ED>> extends MysqlStore<ED, Cxt> implements AsyncRowStore<ED, Cxt> {
     private executor: TriggerExecutor<ED>;
+    private relationAuth: RelationAuth<ED>;
 
-    constructor(storageSchema: StorageSchema<ED>, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<AsyncContext<ED>>, mysqlConfiguration: MySQLConfiguration) {
+    constructor(
+        storageSchema: StorageSchema<ED>, 
+        contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, 
+        mysqlConfiguration: MySQLConfiguration,
+        actionCascadeGraph: AuthCascadePath<ED>[],
+        relationCascadeGraph: AuthCascadePath<ED>[]) {
         super(storageSchema, mysqlConfiguration);
         this.executor = new TriggerExecutor((scene) => contextBuilder(scene)(this));
+        this.relationAuth = new RelationAuth(actionCascadeGraph, relationCascadeGraph, storageSchema);
+        this.initRelationAuthTriggers(contextBuilder);
     }
 
+    /**
+     * relationAuth中需要缓存一些维表的数据
+     */
+    private async initRelationAuthTriggers(contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>) {
+        const context = await contextBuilder()(this);
+        await context.begin();
+
+        // 先direct后free，因为RelationAuth中会根据free判断是否完成
+        const directActionAuths = await this.select('directActionAuth', {
+            data: {
+                id: 1,
+                rootEntity: 1,
+                path: 1,
+                deActions: 1,
+                destEntity: 1,
+            },
+        }, context, {
+            dontCollect: true,
+        });
+        this.relationAuth.setDirectionActionAuths(directActionAuths as ED['directActionAuth']['OpSchema'][]);
+        const freeActionAuths = await this.select('freeActionAuth', {
+            data: {
+                id: 1,
+                deActions: 1,
+                destEntity: 1,
+            },
+        }, context, {
+            dontCollect: true,
+        });
+        this.relationAuth.setFreeActionAuths(freeActionAuths as ED['freeActionAuth']['OpSchema'][]);
+        
+        await context.commit();
+
+        const triggers = this.relationAuth.getAuthDataTriggers<Cxt>();
+        triggers.forEach(
+            (trigger) => this.registerTrigger(trigger)
+        );
+    }
 
     protected async cascadeUpdateAsync<T extends keyof ED>(entity: T, operation: ED[T]['Operation'], context: AsyncContext<ED>, option: MysqlOperateOption) {
         if (!option.blockTrigger) {
             await this.executor.preOperation(entity, operation, context, option);
         }
+        await this.relationAuth.checkRelationAsync(entity, operation, context);
         const result = await super.cascadeUpdateAsync(entity, operation, context, option);
         if (!option.blockTrigger) {
             await this.executor.postOperation(entity, operation, context, option);
@@ -66,7 +114,7 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncCo
         Object.assign(selection, {
             action: 'select',
         });
-
+        await this.relationAuth.checkRelationAsync(entity, selection, context);
         if (!option.blockTrigger) {
             await this.executor.preOperation(entity, selection as ED[T]['Operation'], context, option);
         }
@@ -99,6 +147,7 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncCo
                 action: 'select',
             }, selection) as ED[T]['Operation'];
 
+            await this.relationAuth.checkRelationAsync(entity, selection2, context);
             if (!option.blockTrigger) {
                 await this.executor.preOperation(entity, selection2, context, option);
             }

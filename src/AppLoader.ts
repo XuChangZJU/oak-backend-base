@@ -45,19 +45,47 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
         }
 
         assert(typeof sth === 'object');
-        const sthOut = {};
+        const sthOut: Record<string, any> = {};
         sthExternal.forEach(
             (sth2, idx) => {
                 assert(typeof sth2 === 'object' && !(sth2 instanceof Array), `${join(this.path, 'node_modules', this.externalDependencies[idx], filePath)}中的default输出对象不是非数组对象，与项目对应路径的输出不一致`);
                 const inter = intersection(Object.keys(sthOut), Object.keys(sth2));
                 if (inter.length > 0) {
                     console.warn(`${join(this.path, 'node_modules', this.externalDependencies[idx], filePath)}中的default输出对象中的key值【${inter.join(',')}】与其它对应路径输出的key值有冲突，请仔细检查避免错误`);
+                    inter.forEach(
+                        (ele) => {
+                            if (sth2[ele] instanceof Array && sthOut[ele]) {
+                                assert(sthOut[ele] instanceof Array, `${join(this.path, 'node_modules', this.externalDependencies[idx], filePath)}中的default输出对象的${ele}键值是数组，但之前的相应对象的${ele}却不是，请仔细检查以避免错误`);
+                                console.warn(`${join(this.path, 'node_modules', this.externalDependencies[idx], filePath)}中的default输出对象中的key值【${ele}】与其它对应路径输出的key值【${ele}】将以数组格式进行合并，请仔细检查避免错误`);
+                                sth2[ele].push(...sthOut[ele]);
+                            }
+                            else if (!(sth2[ele] instanceof Array) && sthOut[ele]) {
+                                assert(!(sthOut[ele] instanceof Array), `${join(this.path, 'node_modules', this.externalDependencies[idx], filePath)}中的default输出对象的${ele}键值不是数组，但之前的相应对象的${ele}却是，请仔细检查以避免错误`);
+                                console.warn(`${join(this.path, 'node_modules', this.externalDependencies[idx], filePath)}中的default输出对象中的key值【${ele}】将对与其它对应路径输出的key值【${ele}】进行覆盖，请仔细检查避免错误`);
+                            }
+                        }
+                    )
                 }
                 Object.assign(sthOut, sth2);
             }
         );
+
         const inter = intersection(Object.keys(sthOut), Object.keys(sth));
-        assert(inter.length === 0, `项目${filePath}中的default输出与第三方库中的输出在键值${inter.join(',')}上冲突，请处理`);
+        if (inter.length > 0) {
+            inter.forEach(
+                (ele) => {
+                    if (sth[ele] instanceof Array && sthOut[ele]) {
+                        assert(sthOut[ele] instanceof Array, `项目${filePath}中的default输出对象的${ele}键值是数组，但之前的相应对象的${ele}却不是，请仔细检查以避免错误`);
+                        console.warn(`项目${filePath}中的default输出对象中的key值【${ele}】与其它引用包该路径输出的key值【${ele}】将以数组格式进行合并，请仔细检查避免错误`);
+                        sth[ele].push(...sthOut[ele]);
+                    }
+                    else if (!(sth[ele] instanceof Array) && sthOut[ele]) {
+                        assert(!(sthOut[ele] instanceof Array), `项目${filePath}中的default输出对象的${ele}键值不是数组，但之前的相应对象的${ele}却是，请仔细检查以避免错误`);
+                        console.warn(`项目${filePath}中的default输出对象中的key值【${ele}】将对其它引用包该路径输出的key值【${ele}】进行覆盖，请仔细检查避免错误`);
+                    }
+                }
+            )
+        }
         Object.assign(sthOut, sth);
         return sthOut;
     }
@@ -65,9 +93,10 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
     constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, dbConfig: MySQLConfiguration) {
         super(path);
         const { storageSchema } = require(`${path}/lib/oak-app-domain/Storage`);
+        const { ActionCascadePathGraph, RelationCascadePathGraph } = require(`${path}/lib/oak-app-domain/Relation`);
         this.externalDependencies = require(`${path}/lib/config/externalDependencies`).default;
         this.aspectDict = Object.assign({}, generalAspectDict, this.requireSth('lib/aspects/index'));
-        this.dbStore = new DbStore<ED, Cxt>(storageSchema, contextBuilder, dbConfig);
+        this.dbStore = new DbStore<ED, Cxt>(storageSchema, contextBuilder, dbConfig, ActionCascadePathGraph, RelationCascadePathGraph);
         this.contextBuilder = contextBuilder;
     }
 
@@ -91,7 +120,8 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
             (checker) => this.dbStore.registerChecker(checker)
         );
     
-        const dynamicCheckers = createDynamicCheckers(this.dbStore.getSchema(), authDict);
+        // todo cascadeRemoveTrigger要挪到Schema定义里
+        const dynamicCheckers = createDynamicCheckers(this.dbStore.getSchema(), {});
         dynamicCheckers.forEach(
             (checker) => this.dbStore.registerChecker(checker)
         );
