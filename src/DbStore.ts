@@ -34,7 +34,7 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncCo
         const directActionAuths = await this.select('directActionAuth', {
             data: {
                 id: 1,
-                rootEntity: 1,
+                sourceEntity: 1,
                 path: 1,
                 deActions: 1,
                 destEntity: 1,
