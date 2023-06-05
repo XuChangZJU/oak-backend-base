@@ -93,10 +93,10 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
     constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, dbConfig: MySQLConfiguration) {
         super(path);
         const { storageSchema } = require(`${path}/lib/oak-app-domain/Storage`);
-        const { ActionCascadePathGraph, RelationCascadePathGraph } = require(`${path}/lib/oak-app-domain/Relation`);
+        const { ActionCascadePathGraph, RelationCascadePathGraph, selectFreeEntities, deducedRelationMap } = require(`${path}/lib/oak-app-domain/Relation`);
         this.externalDependencies = require(`${path}/lib/config/externalDependencies`).default;
         this.aspectDict = Object.assign({}, generalAspectDict, this.requireSth('lib/aspects/index'));
-        this.dbStore = new DbStore<ED, Cxt>(storageSchema, contextBuilder, dbConfig, ActionCascadePathGraph, RelationCascadePathGraph);
+        this.dbStore = new DbStore<ED, Cxt>(storageSchema, contextBuilder, dbConfig, ActionCascadePathGraph, RelationCascadePathGraph, deducedRelationMap, selectFreeEntities);
         this.contextBuilder = contextBuilder;
     }
 
@@ -120,8 +120,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
             (checker) => this.dbStore.registerChecker(checker)
         );
     
-        // todo cascadeRemoveTrigger要挪到Schema定义里
-        const dynamicCheckers = createDynamicCheckers(this.dbStore.getSchema(), {});
+        const dynamicCheckers = createDynamicCheckers(this.dbStore.getSchema());
         dynamicCheckers.forEach(
             (checker) => this.dbStore.registerChecker(checker)
         );
