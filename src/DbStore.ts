@@ -28,7 +28,6 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncCo
         if (!option.blockTrigger) {
             await this.executor.preOperation(entity, operation, context, option);
         }
-        await this.relationAuth.checkRelationAsync(entity, operation, context);
         const result = await super.cascadeUpdateAsync(entity, operation, context, option);
         if (!option.blockTrigger) {
             await this.executor.postOperation(entity, operation, context, option);
@@ -48,6 +47,7 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncCo
             await context.begin();
         }
         try {
+            await this.relationAuth.checkRelationAsync(entity, operation, context);
             result = await super.operate(entity, operation, context, option);
         }
         catch (err) {

@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { scheduleJob } from 'node-schedule';
-import { analyzeActionDefDict } from "oak-domain/lib/store/actionDef";
+import { makeIntrinsicCTWs } from "oak-domain/lib/store/actionDef";
 import { intersection } from 'oak-domain/lib/utils/lodash';
 import { createDynamicCheckers } from 'oak-domain/lib/checkers';
 import { createDynamicTriggers } from 'oak-domain/lib/triggers';
@@ -106,7 +106,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
         const authDict = this.requireSth('lib/auth/index');
         const { ActionDefDict } = require(`${this.path}/lib/oak-app-domain/ActionDefDict`);
     
-        const { triggers: adTriggers, checkers: adCheckers } = analyzeActionDefDict(this.dbStore.getSchema(), ActionDefDict);
+        const { triggers: adTriggers, checkers: adCheckers } = makeIntrinsicCTWs(this.dbStore.getSchema(), ActionDefDict);
         triggers.forEach(
             (trigger: Trigger<ED, keyof ED, Cxt>) => this.dbStore.registerTrigger(trigger)
         );
@@ -118,24 +118,14 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
         );
         adCheckers.forEach(
             (checker) => this.dbStore.registerChecker(checker)
-        );
-    
-        const dynamicCheckers = createDynamicCheckers(this.dbStore.getSchema());
-        dynamicCheckers.forEach(
-            (checker) => this.dbStore.registerChecker(checker)
-        );
-    
-        const dynamicTriggers = createDynamicTriggers(this.dbStore.getSchema());
-        dynamicTriggers.forEach(
-            (trigger) => this.dbStore.registerTrigger(trigger)
-        );
+        );    
     }
 
     startWatchers() {
         const watchers = this.requireSth('lib/watchers/index');
         const { ActionDefDict } = require(`${this.path}/lib/oak-app-domain/ActionDefDict`);
     
-        const { watchers: adWatchers } = analyzeActionDefDict(this.dbStore.getSchema(), ActionDefDict);
+        const { watchers: adWatchers } = makeIntrinsicCTWs(this.dbStore.getSchema(), ActionDefDict);
         const totalWatchers = (<Watcher<ED, keyof ED, Cxt>[]>watchers).concat(adWatchers);
     
         let count = 0;
