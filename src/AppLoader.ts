@@ -209,7 +209,6 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
 
         const data = this.requireSth('lib/data/index');
         const context = await this.contextBuilder()(this.dbStore);
-        await context.begin();
         for (const entity in data) {
             let rows = data[entity];
             if (entity === 'area') {
@@ -217,17 +216,25 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
                 rows = require('./data/area.json');
             }
             if (rows.length > 0) {
-                await this.dbStore.operate(entity as keyof ED, {
-                    data: rows,
-                    action: 'create',
-                } as any, context, {
-                    dontCollect: true,
-                    dontCreateOper: true,
-                });
-                console.log(`data in ${entity} initialized!`);
+                await context.begin();
+                try {
+                    await this.dbStore.operate(entity as keyof ED, {
+                        data: rows,
+                        action: 'create',
+                    } as any, context, {
+                        dontCollect: true,
+                        dontCreateOper: true,
+                    });
+                    await context.commit();
+                    console.log(`data in ${entity} initialized!`);
+                }
+                catch (err) {
+                    await context.rollback();
+                    console.error(`data on ${entity} initilization failed!`);
+                    throw err;
+                }
             }
         }
-        await context.commit();
         this.dbStore.disconnect();
     }
 
