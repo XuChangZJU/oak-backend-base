@@ -1,6 +1,6 @@
 {
   "name": "oak-backend-base",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "description": "oak-backend-base",
   "main": "lib/index",
   "author": {

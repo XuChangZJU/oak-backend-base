@@ -287,4 +287,9 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
             }
         }
     }
+
+    async execRoutine(routine: (context: Cxt) => Promise<void>) {
+        const context = await this.contextBuilder()(this.dbStore);
+        await routine(context);        
+    }
 }

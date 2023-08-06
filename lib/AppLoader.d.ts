@@ -21,4 +21,5 @@ export declare class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt exten
     getEndpoints(): Record<string, Endpoint<ED, Cxt>>;
     startTimers(): void;
     execStartRoutines(): Promise<void>;
+    execRoutine(routine: (context: Cxt) => Promise<void>): Promise<void>;
 }
