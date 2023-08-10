@@ -108,14 +108,14 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncCo
             await context.begin();
         }
         try {
-            const selection2 = Object.assign({
-                action: 'select',
-            }, selection) as ED[T]['Operation'];
+            // const selection2 = Object.assign({
+            //     action: 'select',
+            // }, selection) as ED[T]['Operation'];
 
-            await this.relationAuth.checkRelationAsync(entity, selection2, context);
-            if (!option.blockTrigger) {
-                await this.executor.preOperation(entity, selection2, context, option);
-            }
+            // await this.relationAuth.checkRelationAsync(entity, selection2, context);
+            // if (!option.blockTrigger) {
+            //     await this.executor.preOperation(entity, selection2, context, option);
+            // }
             result = await super.count(entity, selection, context, option);
             /*  count应该不存在后trigger吧
             if (!option.blockTrigger) {
