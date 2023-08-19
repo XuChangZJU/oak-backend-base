@@ -18,10 +18,13 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncCo
         actionCascadeGraph: AuthCascadePath<ED>[],
         relationCascadeGraph: AuthCascadePath<ED>[],
         authDeduceRelationMap: AuthDeduceRelationMap<ED>,
-        selectFreeEntities: (keyof ED)[]) {
+        selectFreeEntities: (keyof ED)[] = [],
+        createFreeEntities: (keyof ED)[] = [],
+        updateFreeEntities: (keyof ED)[] = []) {
         super(storageSchema, mysqlConfiguration);
         this.executor = new TriggerExecutor((scene) => contextBuilder(scene)(this));
-        this.relationAuth = new RelationAuth(storageSchema, actionCascadeGraph, relationCascadeGraph, authDeduceRelationMap, selectFreeEntities);
+        this.relationAuth = new RelationAuth(storageSchema, actionCascadeGraph, relationCascadeGraph,
+            authDeduceRelationMap, selectFreeEntities, createFreeEntities, updateFreeEntities);
     }
 
     protected async cascadeUpdateAsync<T extends keyof ED>(entity: T, operation: ED[T]['Operation'], context: AsyncContext<ED>, option: MysqlOperateOption) {

@@ -6,7 +6,7 @@ import { AsyncContext, AsyncRowStore } from 'oak-domain/lib/store/AsyncRowStore'
 export declare class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncContext<ED>> extends MysqlStore<ED, Cxt> implements AsyncRowStore<ED, Cxt> {
     private executor;
     private relationAuth;
-    constructor(storageSchema: StorageSchema<ED>, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, mysqlConfiguration: MySQLConfiguration, actionCascadeGraph: AuthCascadePath<ED>[], relationCascadeGraph: AuthCascadePath<ED>[], authDeduceRelationMap: AuthDeduceRelationMap<ED>, selectFreeEntities: (keyof ED)[]);
+    constructor(storageSchema: StorageSchema<ED>, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, mysqlConfiguration: MySQLConfiguration, actionCascadeGraph: AuthCascadePath<ED>[], relationCascadeGraph: AuthCascadePath<ED>[], authDeduceRelationMap: AuthDeduceRelationMap<ED>, selectFreeEntities?: (keyof ED)[], createFreeEntities?: (keyof ED)[], updateFreeEntities?: (keyof ED)[]);
     protected cascadeUpdateAsync<T extends keyof ED>(entity: T, operation: ED[T]['Operation'], context: AsyncContext<ED>, option: MysqlOperateOption): Promise<import("oak-domain/lib/types").OperationResult<ED>>;
     operate<T extends keyof ED>(entity: T, operation: ED[T]['Operation'], context: Cxt, option: MysqlOperateOption): Promise<import("oak-domain/lib/types").OperationResult<ED>>;
     select<T extends keyof ED>(entity: T, selection: ED[T]['Selection'], context: Cxt, option: MySqlSelectOption): Promise<Partial<ED[T]["Schema"]>[]>;
