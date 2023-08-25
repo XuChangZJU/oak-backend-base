@@ -108,6 +108,7 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncCo
             await context.begin();
         }
         try {
+            // count不用检查权限，因为检查权限中本身要用到count
             // const selection2 = Object.assign({
             //     action: 'select',
             // }, selection) as ED[T]['Operation'];
