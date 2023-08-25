@@ -1,6 +1,7 @@
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { scheduleJob } from 'node-schedule';
+import { OAK_EXTERNAL_LIBS_FILEPATH } from 'oak-domain/lib/compiler/env';
 import { makeIntrinsicCTWs } from "oak-domain/lib/store/actionDef";
 import { intersection } from 'oak-domain/lib/utils/lodash';
 import { createDynamicCheckers } from 'oak-domain/lib/checkers';
@@ -93,10 +94,11 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
     constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, dbConfig: MySQLConfiguration) {
         super(path);
         const { storageSchema } = require(`${path}/lib/oak-app-domain/Storage`);
-        const { ActionCascadePathGraph, RelationCascadePathGraph, selectFreeEntities, deducedRelationMap } = require(`${path}/lib/oak-app-domain/Relation`);
-        this.externalDependencies = require(`${path}/lib/config/externalDependencies`).default;
+        const { ActionCascadePathGraph, RelationCascadePathGraph, selectFreeEntities, createFreeEntities, updateFreeEntities, deducedRelationMap } = require(`${path}/lib/oak-app-domain/Relation`);
+        this.externalDependencies = require(OAK_EXTERNAL_LIBS_FILEPATH(join(path, 'lib')));
         this.aspectDict = Object.assign({}, generalAspectDict, this.requireSth('lib/aspects/index'));
-        this.dbStore = new DbStore<ED, Cxt>(storageSchema, contextBuilder, dbConfig, ActionCascadePathGraph, RelationCascadePathGraph, deducedRelationMap, selectFreeEntities);
+        this.dbStore = new DbStore<ED, Cxt>(storageSchema, contextBuilder, dbConfig, ActionCascadePathGraph, RelationCascadePathGraph, deducedRelationMap,
+            selectFreeEntities, createFreeEntities, updateFreeEntities);
         this.contextBuilder = contextBuilder;
     }
 
