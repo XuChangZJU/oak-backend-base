@@ -12,6 +12,7 @@
   "scripts": {
     "copy-files": "copyfiles -u 1 src/**/*.json lib/",
     "test": "ts-node test/test.ts",
+    "test2": "ts-node test/testDbStore.ts",
     "build": "tsc && npm run copy-files"
   },
   "dependencies": {
