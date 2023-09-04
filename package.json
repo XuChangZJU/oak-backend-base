@@ -24,6 +24,7 @@
     "oak-common-aspect": "file:../oak-common-aspect",
     "oak-db": "file:../oak-db",
     "oak-domain": "file:../oak-domain",
+    "socket.io": "^4.7.2",
     "uuid": "^8.3.2"
   },
   "license": "ISC",

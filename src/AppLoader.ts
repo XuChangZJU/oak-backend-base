@@ -4,27 +4,34 @@ import { scheduleJob } from 'node-schedule';
 import { OAK_EXTERNAL_LIBS_FILEPATH } from 'oak-domain/lib/compiler/env';
 import { makeIntrinsicCTWs } from "oak-domain/lib/store/actionDef";
 import { intersection } from 'oak-domain/lib/utils/lodash';
-import { createDynamicCheckers } from 'oak-domain/lib/checkers';
-import { createDynamicTriggers } from 'oak-domain/lib/triggers';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { generateNewIdAsync } from 'oak-domain/lib/utils/uuid';
-import { AppLoader as GeneralAppLoader, Trigger, Checker, Aspect, RowStore, Context, EntityDict, Watcher, BBWatcher, WBWatcher } from "oak-domain/lib/types";
+import { AppLoader as GeneralAppLoader, Trigger, Checker, Aspect, RowStore, Context, EntityDict, Watcher, BBWatcher, WBWatcher, OpRecord } from "oak-domain/lib/types";
 import { DbStore } from "./DbStore";
 import generalAspectDict, { clearPorts, registerPorts } from 'oak-common-aspect/lib/index';
 import { MySQLConfiguration } from 'oak-db/lib/MySQL/types/Configuration';
 import { AsyncContext } from "oak-domain/lib/store/AsyncRowStore";
-import { Endpoint } from 'oak-domain/lib/types/Endpoint';
+import { Endpoint, EndpointItem } from 'oak-domain/lib/types/Endpoint';
 import assert from 'assert';
+import { IncomingHttpHeaders, IncomingMessage } from 'http';
+import { Server as SocketIoServer } from 'socket.io';
+
+import DataSubscriber from './DataSubscriber';
 
 
 export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncContext<ED>> extends GeneralAppLoader<ED, Cxt> {
     private dbStore: DbStore<ED, Cxt>;
     private aspectDict: Record<string, Aspect<ED, Cxt>>;
     private externalDependencies: string[];
+    private dataSubscriber?: DataSubscriber<ED, Cxt>;
     private contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>;
 
     private requireSth(filePath: string): any {
-        const sth = require(join(this.path, filePath)).default;
+        const depFilePath = join(this.path, filePath);
+        let sth: any;
+        if (existsSync(`${depFilePath}.js`)) {
+            sth = require(join(this.path, filePath)).default;
+        }
         const sthExternal = this.externalDependencies.map(
             ele => {
                 const depFilePath = join(this.path, 'node_modules', ele, filePath);
@@ -35,6 +42,16 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
         ).filter(
             ele => !!ele
         );
+
+        if (!sth) {
+            if (sthExternal.length > 0 && sthExternal[0] instanceof Array) {
+                sth = [];
+            }
+            else {
+                sth = {};
+            }
+        }
+
         if (sth instanceof Array) {
             sthExternal.forEach(
                 (sth2, idx) => {
@@ -91,8 +108,9 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
         return sthOut;
     }
 
-    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, dbConfig: MySQLConfiguration) {
+    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, io?: SocketIoServer) {
         super(path);
+        const dbConfig: MySQLConfiguration = require(join(path, '/configuration/mysql.json'));
         const { storageSchema } = require(`${path}/lib/oak-app-domain/Storage`);
         const { ActionCascadePathGraph, RelationCascadePathGraph, selectFreeEntities, createFreeEntities, updateFreeEntities, deducedRelationMap } = require(`${path}/lib/oak-app-domain/Relation`);
         this.externalDependencies = require(OAK_EXTERNAL_LIBS_FILEPATH(join(path, 'lib')));
@@ -100,14 +118,16 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
         this.dbStore = new DbStore<ED, Cxt>(storageSchema, contextBuilder, dbConfig, ActionCascadePathGraph, RelationCascadePathGraph, deducedRelationMap,
             selectFreeEntities, createFreeEntities, updateFreeEntities);
         this.contextBuilder = contextBuilder;
+        if (io) {
+            this.dataSubscriber = new DataSubscriber(io, (scene) => this.contextBuilder(scene)(this.dbStore));
+        }
     }
 
     initTriggers() {
         const triggers = this.requireSth('lib/triggers/index');
         const checkers = this.requireSth('lib/checkers/index');
-        const authDict = this.requireSth('lib/auth/index');
         const { ActionDefDict } = require(`${this.path}/lib/oak-app-domain/ActionDefDict`);
-    
+
         const { triggers: adTriggers, checkers: adCheckers } = makeIntrinsicCTWs(this.dbStore.getSchema(), ActionDefDict);
         triggers.forEach(
             (trigger: Trigger<ED, keyof ED, Cxt>) => this.dbStore.registerTrigger(trigger)
@@ -120,16 +140,16 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
         );
         adCheckers.forEach(
             (checker) => this.dbStore.registerChecker(checker)
-        );    
+        );
     }
 
     startWatchers() {
         const watchers = this.requireSth('lib/watchers/index');
         const { ActionDefDict } = require(`${this.path}/lib/oak-app-domain/ActionDefDict`);
-    
+
         const { watchers: adWatchers } = makeIntrinsicCTWs(this.dbStore.getSchema(), ActionDefDict);
         const totalWatchers = (<Watcher<ED, keyof ED, Cxt>[]>watchers).concat(adWatchers);
-    
+
         let count = 0;
         const doWatchers = async () => {
             count++;
@@ -150,7 +170,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
                         }, context, {
                             dontCollect: true,
                         });
-    
+
                         console.log(`执行了watcher【${w.name}】，结果是：`, result);
                     }
                     else {
@@ -164,7 +184,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
                             dontCollect: true,
                             blockTrigger: true,
                         });
-    
+
                         const result = await fn(context, rows);
                         console.log(`执行了watcher【${w.name}】，结果是：`, result);
                     }
@@ -177,7 +197,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
             }
             const duration = Date.now() - start;
             console.log(`第${count}次执行watchers，共执行${watchers.length}个，耗时${duration}毫秒`);
-    
+
             setTimeout(() => doWatchers(), 120000);
         };
         doWatchers();
@@ -198,12 +218,31 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
         this.dbStore.disconnect();
     }
 
-    async execAspect(name: string, context: Cxt, params?: any): Promise<any> {
+    async execAspect(name: string, contextString?: string, params?: any): Promise<{
+        opRecords: OpRecord<ED>[];
+        result: any;
+        message?: string;
+    }> {
+        const context = await this.contextBuilder(contextString)(this.dbStore);
         const fn = this.aspectDict[name];
         if (!fn) {
             throw new Error(`不存在的接口名称: ${name}`);
         }
-        return await fn(params, context);
+        await context.begin();
+        try {
+            const result = await fn(params, context);
+            await context.commit();
+            await context.refineOpRecords();
+            return {
+                opRecords: context.opRecords,
+                message: context.getMessage(),
+                result,
+            };
+        }
+        catch (err) {
+            await context.rollback();
+            throw err;
+        }
     }
 
     async initialize(dropIfExists?: boolean) {
@@ -228,7 +267,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
                         dontCreateOper: true,
                     });
                     await context.commit();
-                    console.log(`data in ${entity} initialized!`);
+                    console.log(`data in ${entity} initialized, ${rows.length} rows inserted`);
                 }
                 catch (err) {
                     await context.rollback();
@@ -244,9 +283,47 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
         return this.dbStore;
     }
 
-    getEndpoints(): Record<string, Endpoint<ED, Cxt>> {
-        const endpoints = this.requireSth('lib/endpoints/index');
-        return endpoints;
+    getEndpoints() {
+        const endpoints: Record<string, Endpoint<ED, Cxt>> = this.requireSth('lib/endpoints/index');
+        const endPointRouters: Array<[EndpointItem<ED, Cxt>['name'], EndpointItem<ED, Cxt>['method'], string, (params: Record<string, string>, headers: IncomingHttpHeaders, req: IncomingMessage, body?: any) => Promise<any>]> = [];
+        const endPointMap: Record<string, true> = {};
+
+        const transformEndpointItem = (key: string, item: EndpointItem<ED, Cxt>) => {
+            const { name, method, fn } = item;
+            const k = `${key}-${name}-${method}`;
+            if (endPointMap[k]) {
+                throw new Error(`endpoint中，url为「${key}」、名为${name}的方法「${method}」存在重复定义`);
+            }
+            endPointMap[k] = true;
+            endPointRouters.push(
+                [name, method, key, async (params, headers, req, body) => {
+                    const context = await this.contextBuilder()(this.dbStore);
+                    await context.begin();
+                    try {
+                        const result = await fn(context, params, headers, req, body);
+                        await context.commit();
+                        return result;
+                    }
+                    catch (err) {
+                        await context.rollback();
+                        console.error(`endpoint「${key}」方法「${method}」出错`, err);
+                        throw err;
+                    }
+                }]
+            );
+        };
+        for (const router in endpoints) {
+            const item = endpoints[router];
+            if (item instanceof Array) {
+                item.forEach(
+                    ele => transformEndpointItem(router, ele)
+                );
+            }
+            else {
+                transformEndpointItem(router, item);
+            }
+        }
+        return endPointRouters;
     }
 
     startTimers() {
@@ -263,7 +340,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
                     console.log(`定时器【${name}】执行完成，耗时${Date.now() - start}毫秒，结果是【${result}】`);
                     await context.commit();
                 }
-                catch(err) {
+                catch (err) {
                     console.warn(`定时器【${name}】执行失败，耗时${Date.now() - start}毫秒，错误是`, err);
                     await context.rollback();
                 }
@@ -275,7 +352,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
         const routines = this.requireSth('lib/routines/start');
         for (const routine of routines) {
             const { name, fn } = routine;
-            const context = await this.contextBuilder()(this.dbStore);        
+            const context = await this.contextBuilder()(this.dbStore);
             const start = Date.now();
             await context.begin();
             try {
@@ -292,6 +369,6 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
 
     async execRoutine(routine: (context: Cxt) => Promise<void>) {
         const context = await this.contextBuilder()(this.dbStore);
-        await routine(context);        
+        await routine(context);
     }
 }
