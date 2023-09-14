@@ -5,7 +5,9 @@ import { Server } from 'socket.io';
 export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Context extends AsyncContext<ED>> {
     private io;
     private contextBuilder;
+    private hash;
     constructor(io: Server, contextBuilder: (scene?: string) => Promise<Context>);
+    private calcEntityFilterID;
     /**
      * 来自外部的socket连接，监听数据变化
      */
