@@ -1,3 +1,3 @@
-export declare type GenerateIdOption = {
+export type GenerateIdOption = {
     shuffle?: boolean;
 };

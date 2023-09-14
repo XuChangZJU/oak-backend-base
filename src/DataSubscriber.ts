@@ -44,6 +44,9 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
                     (ele) => {
                         const { id, entity, filter } = ele;
                         console.log('sub', id, entity, filter);
+                        // 尝试select此filter，如果失败说明权限越界
+                        // todo
+
                         const globalId = this.calcEntityFilterID(entity, filter);
                         (socket as any).idMap[id] = globalId;
                         socket.join(globalId);
