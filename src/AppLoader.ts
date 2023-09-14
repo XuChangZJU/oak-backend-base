@@ -117,9 +117,25 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
         this.aspectDict = Object.assign({}, generalAspectDict, this.requireSth('lib/aspects/index'));
         this.dbStore = new DbStore<ED, Cxt>(storageSchema, contextBuilder, dbConfig, ActionCascadePathGraph, RelationCascadePathGraph, deducedRelationMap,
             selectFreeEntities, createFreeEntities, updateFreeEntities);
-        this.contextBuilder = contextBuilder;
         if (io) {
             this.dataSubscriber = new DataSubscriber(io, (scene) => this.contextBuilder(scene)(this.dbStore));
+            this.contextBuilder = (scene) => async (store) => {
+                const context = await contextBuilder(scene)(store);
+
+                // 注入在提交前向dataSubscribe
+                const originCommit = context.commit;
+                context.commit = async () => {
+                    const { opRecords } = context;
+                    const userId = context.getCurrentUserId();
+
+                    originCommit.call(context);
+                };
+                
+                return context;
+            }
+        }
+        else {
+            this.contextBuilder = contextBuilder;
         }
     }
 

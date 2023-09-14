@@ -1,4 +1,4 @@
-import { EntityDict } from 'oak-domain/lib/types';
+import { EntityDict, OpRecord } from 'oak-domain/lib/types';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { AsyncContext } from 'oak-domain/lib/store/AsyncRowStore';
 import { Server } from 'socket.io';
@@ -24,5 +24,9 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
                 console.log('disconnect', reason);
             });
         })
+    }
+
+    onDataCommited(records: OpRecord<ED>[], userId?: string) {
+                
     }
 }
