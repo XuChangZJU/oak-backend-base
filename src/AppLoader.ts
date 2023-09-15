@@ -125,9 +125,6 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
                 // 注入在提交前向dataSubscribe
                 const originCommit = context.commit;
                 context.commit = async () => {
-                    const { opRecords } = context;
-                    const userId = context.getCurrentUserId();
-
                     await originCommit.call(context);
                 };
                 
