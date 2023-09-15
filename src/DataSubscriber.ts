@@ -1,8 +1,10 @@
 import assert from 'assert';
-import { EntityDict, SubDataDef, OpRecord } from 'oak-domain/lib/types';
+import { unset } from 'oak-domain/lib/utils/lodash';
+import { EntityDict, SubDataDef, OpRecord, CreateOpResult, UpdateOpResult, RemoveOpResult } from 'oak-domain/lib/types';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { AsyncContext } from 'oak-domain/lib/store/AsyncRowStore';
-import { Server, Namespace } from 'socket.io';
+import { Namespace } from 'socket.io';
+import { checkFilterRepel } from 'oak-domain';
 
 
 export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Context extends AsyncContext<ED>> {
@@ -11,12 +13,38 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
     private filterMap: {
         [k in keyof ED]?: Record<string, ED[keyof ED]['Selection']['filter']>;
     }
+    private idEntityMap: Record<string, keyof ED>;
 
     constructor(ns: Namespace, contextBuilder: (scene?: string) => Promise<Context>) {
         this.ns = ns;
         this.contextBuilder = contextBuilder;
         this.startup();
         this.filterMap = {};
+        this.idEntityMap = {};
+    }
+
+    private formCreateRoomRoutine(def: SubDataDef<ED, keyof ED>) {
+        const { id, entity, filter } = def;
+        return (room: string) => {
+            if (room === id) {
+                console.log('add filter', room);
+                // 本房间不存在，说明这个filter是新出现的
+                if (this.filterMap[entity]) {
+                    // id的唯一性由前台保证，重复则无视
+                    Object.assign(this.filterMap[entity]!, {
+                        [id]: filter,
+                    });
+                }
+                else {
+                    Object.assign(this.filterMap, {
+                        [entity]: {
+                            [id]: filter,
+                        }
+                    });
+                }
+                this.idEntityMap[id] = entity;
+            }
+        };
     }
 
     /**
@@ -24,7 +52,6 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
      */
     private startup() {
         this.ns.on('connection', async (socket) => {
-            console.log('connection', socket.id);
             const { 'oak-cxt': cxtStr } = socket.handshake.headers;
             const context = await this.contextBuilder(cxtStr as string);
             (socket as any).userId = context.getCurrentUserId();
@@ -32,13 +59,11 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
             (socket as any).idMap = {};
 
             socket.on('sub', async (data: SubDataDef<ED, keyof ED>[], callback) => {
-                console.log(data);
                 try {
                     await Promise.all(
                         data.map(
                             async (ele) => {
                                 const { id, entity, filter } = ele;
-                                console.log('sub', id, entity, filter);
                                 // 尝试select此filter，如果失败说明权限越界
                                 await context.select(entity, {
                                     data: {
@@ -54,52 +79,81 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
                     callback(err.toString());
                     return;
                 }
-                
-                const { rooms } = this.ns.adapter;
+
                 data.forEach(
                     (ele) => {
-                        const { id, entity, filter } = ele;
-                        if (!rooms.get(id)) {
-                            // 本房间不存在，说明这个filter是新出现的
-                            if (this.filterMap[entity]) {
-                                // id的唯一性由前台保证，重复则无视
-                                Object.assign(this.filterMap[entity]!, {
-                                    [id]: filter,
-                                });
-                            }
-                            else {
-                                Object.assign(this.filterMap, {
-                                    [entity]: {
-                                        id: filter,
-                                    }
-                                });
-                            }                                                        
-                        }
-                        socket.join(id);
+                        const createRoomRoutine = this.formCreateRoomRoutine(ele);
+                        this.ns.adapter.on('create-room', createRoomRoutine);
+                        socket.join(ele.id);
+                        this.ns.adapter.off('create-room', createRoomRoutine);
                     }
                 );
+                callback('');
             });
 
             socket.on('unsub', (ids: string[]) => {
-                console.log('unsub', ids);
                 ids.forEach(
                     (id) => {
-                        socket.leave(id)
+                        socket.leave(id);
                     }
                 );
             });
 
-            socket.on('disconnect', (reason) => {
-                console.log('disconnect', reason);
-            });
+
         });
 
-        this.ns.on('delete-room', (room, id) => {
-            console.log(room, id);
-        })
+        this.ns.adapter.on('delete-room', (room) => {
+            const entity = this.idEntityMap[room];
+            if (entity) {
+                console.log('remove filter', room);
+                unset(this.filterMap[entity], room);
+                unset(this.idEntityMap, room);
+            }
+        });
     }
 
-    onDataCommited(records: OpRecord<ED>[], userId?: string) {
+    private sendRecord(entity: keyof ED, filter: ED[keyof ED]['Selection']['filter'], record: OpRecord<ED>) {
+        if (this.filterMap[entity]) {
+            Object.keys(this.filterMap[entity]!).forEach(
+                async (room) => {
+                    const context = await this.contextBuilder();
+                    const filter2 = this.filterMap[entity]![room];
+                    const repeled = await checkFilterRepel(entity, context, filter, filter2, true)
+                    if (!repeled) {
+                        this.ns.to(room).emit('data', [record], [room]);
+                    }
+                }
+            );
+        }
+    }
 
+    onDataCommited(context: Context) {
+        const userId = context.getCurrentUserId(true);
+        const { opRecords } = context;
+        opRecords.forEach(
+            (record) => {
+                const { a } = record;
+                switch (a) {
+                    case 'c': {
+                        const { e, d } = record as CreateOpResult<ED, keyof ED>;
+                        this.sendRecord(e, d, record);
+                        break;
+                    }
+                    case 'u': {
+                        const { e, d, f } = record as UpdateOpResult<ED, keyof ED>;
+                        this.sendRecord(e, f, record);
+                        break;
+                    }
+                    case 'r': {
+                        const { e, f } = record as RemoveOpResult<ED, keyof ED>;
+                        this.sendRecord(e, f, record);
+                        break;
+                    }
+                    default: {
+                        break;
+                    }
+                }
+            }
+        );
     }
 }
