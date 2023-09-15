@@ -1,13 +1,12 @@
 import { EntityDict, OpRecord } from 'oak-domain/lib/types';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { AsyncContext } from 'oak-domain/lib/store/AsyncRowStore';
-import { Server } from 'socket.io';
+import { Namespace } from 'socket.io';
 export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Context extends AsyncContext<ED>> {
-    private io;
+    private ns;
     private contextBuilder;
-    private hash;
-    constructor(io: Server, contextBuilder: (scene?: string) => Promise<Context>);
-    private calcEntityFilterID;
+    private filterMap;
+    constructor(ns: Namespace, contextBuilder: (scene?: string) => Promise<Context>);
     /**
      * 来自外部的socket连接，监听数据变化
      */

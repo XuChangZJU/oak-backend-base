@@ -3,7 +3,7 @@ import { AppLoader as GeneralAppLoader, EntityDict, OpRecord } from "oak-domain/
 import { DbStore } from "./DbStore";
 import { AsyncContext } from "oak-domain/lib/store/AsyncRowStore";
 import { IncomingHttpHeaders, IncomingMessage } from 'http';
-import { Server as SocketIoServer } from 'socket.io';
+import { Namespace } from 'socket.io';
 export declare class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncContext<ED>> extends GeneralAppLoader<ED, Cxt> {
     private dbStore;
     private aspectDict;
@@ -11,7 +11,7 @@ export declare class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt exten
     private dataSubscriber?;
     private contextBuilder;
     private requireSth;
-    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, io?: SocketIoServer);
+    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, ns?: Namespace);
     initTriggers(): void;
     startWatchers(): void;
     mount(initialize?: true): Promise<void>;

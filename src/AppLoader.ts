@@ -14,7 +14,7 @@ import { AsyncContext } from "oak-domain/lib/store/AsyncRowStore";
 import { Endpoint, EndpointItem } from 'oak-domain/lib/types/Endpoint';
 import assert from 'assert';
 import { IncomingHttpHeaders, IncomingMessage } from 'http';
-import { Server as SocketIoServer } from 'socket.io';
+import { Server as SocketIoServer, Namespace } from 'socket.io';
 
 import DataSubscriber from './DataSubscriber';
 
@@ -108,7 +108,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
         return sthOut;
     }
 
-    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, io?: SocketIoServer) {
+    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, ns?: Namespace) {
         super(path);
         const dbConfig: MySQLConfiguration = require(join(path, '/configuration/mysql.json'));
         const { storageSchema } = require(`${path}/lib/oak-app-domain/Storage`);
@@ -117,8 +117,8 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
         this.aspectDict = Object.assign({}, generalAspectDict, this.requireSth('lib/aspects/index'));
         this.dbStore = new DbStore<ED, Cxt>(storageSchema, contextBuilder, dbConfig, ActionCascadePathGraph, RelationCascadePathGraph, deducedRelationMap,
             selectFreeEntities, createFreeEntities, updateFreeEntities);
-        if (io) {
-            this.dataSubscriber = new DataSubscriber(io, (scene) => this.contextBuilder(scene)(this.dbStore));
+        if (ns) {
+            this.dataSubscriber = new DataSubscriber(ns, (scene) => this.contextBuilder(scene)(this.dbStore));
             this.contextBuilder = (scene) => async (store) => {
                 const context = await contextBuilder(scene)(store);
 
@@ -128,7 +128,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
                     const { opRecords } = context;
                     const userId = context.getCurrentUserId();
 
-                    originCommit.call(context);
+                    await originCommit.call(context);
                 };
                 
                 return context;
