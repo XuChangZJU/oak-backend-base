@@ -10,7 +10,7 @@ import { AppLoader as GeneralAppLoader, Trigger, Checker, Aspect, RowStore, Cont
 import { DbStore } from "./DbStore";
 import generalAspectDict, { clearPorts, registerPorts } from 'oak-common-aspect/lib/index';
 import { MySQLConfiguration } from 'oak-db/lib/MySQL/types/Configuration';
-import { AsyncContext } from "oak-domain/lib/store/AsyncRowStore";
+import { BackendRuntimeContext } from 'oak-frontend-base';
 import { Endpoint, EndpointItem } from 'oak-domain/lib/types/Endpoint';
 import assert from 'assert';
 import { IncomingHttpHeaders, IncomingMessage } from 'http';
@@ -19,12 +19,12 @@ import { Server as SocketIoServer, Namespace } from 'socket.io';
 import DataSubscriber from './DataSubscriber';
 
 
-export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncContext<ED>> extends GeneralAppLoader<ED, Cxt> {
+export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends BackendRuntimeContext<ED>> extends GeneralAppLoader<ED, Cxt> {
     private dbStore: DbStore<ED, Cxt>;
     private aspectDict: Record<string, Aspect<ED, Cxt>>;
     private externalDependencies: string[];
     private dataSubscriber?: DataSubscriber<ED, Cxt>;
-    private contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>;
+    private contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>, header?: IncomingHttpHeaders) => Promise<Cxt>;
 
     private requireSth(filePath: string): any {
         const depFilePath = join(this.path, filePath);
@@ -108,7 +108,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
         return sthOut;
     }
 
-    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, ns?: Namespace) {
+    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>, header?: IncomingHttpHeaders) => Promise<Cxt>, ns?: Namespace) {
         super(path);
         const dbConfig: MySQLConfiguration = require(join(path, '/configuration/mysql.json'));
         const { storageSchema } = require(`${path}/lib/oak-app-domain/Storage`);
@@ -232,12 +232,12 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Async
         this.dbStore.disconnect();
     }
 
-    async execAspect(name: string, contextString?: string, params?: any): Promise<{
+    async execAspect(name: string, header?: IncomingHttpHeaders, contextString?: string, params?: any): Promise<{
         opRecords: OpRecord<ED>[];
         result: any;
         message?: string;
     }> {
-        const context = await this.contextBuilder(contextString)(this.dbStore);
+        const context = await this.contextBuilder(contextString)(this.dbStore, header);
         const fn = this.aspectDict[name];
         if (!fn) {
             throw new Error(`不存在的接口名称: ${name}`);

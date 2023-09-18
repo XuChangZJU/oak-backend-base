@@ -2,8 +2,9 @@ import { MysqlStore, MySqlSelectOption, MysqlOperateOption } from 'oak-db';
 import { EntityDict, StorageSchema, Trigger, Checker, AuthDeduceRelationMap, SelectOption, AuthCascadePath } from 'oak-domain/lib/types';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { MySQLConfiguration } from 'oak-db/lib/MySQL/types/Configuration';
+import { BackendRuntimeContext } from 'oak-frontend-base';
 import { AsyncContext, AsyncRowStore } from 'oak-domain/lib/store/AsyncRowStore';
-export declare class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncContext<ED>> extends MysqlStore<ED, Cxt> implements AsyncRowStore<ED, Cxt> {
+export declare class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends BackendRuntimeContext<ED>> extends MysqlStore<ED, Cxt> implements AsyncRowStore<ED, Cxt> {
     private executor;
     private relationAuth;
     constructor(storageSchema: StorageSchema<ED>, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, mysqlConfiguration: MySQLConfiguration, actionCascadeGraph: AuthCascadePath<ED>[], relationCascadeGraph: AuthCascadePath<ED>[], authDeduceRelationMap: AuthDeduceRelationMap<ED>, selectFreeEntities?: (keyof ED)[], createFreeEntities?: (keyof ED)[], updateFreeEntities?: (keyof ED)[]);

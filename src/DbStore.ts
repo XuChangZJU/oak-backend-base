@@ -1,13 +1,14 @@
 import { MysqlStore, MySqlSelectOption, MysqlOperateOption } from 'oak-db';
-import { EntityDict, Context, StorageSchema, Trigger, Checker, AuthDeduceRelationMap, SelectOption, AuthCascadePath } from 'oak-domain/lib/types';
+import { EntityDict, StorageSchema, Trigger, Checker, AuthDeduceRelationMap, SelectOption, AuthCascadePath } from 'oak-domain/lib/types';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { TriggerExecutor } from 'oak-domain/lib/store/TriggerExecutor';
 import { MySQLConfiguration, } from 'oak-db/lib/MySQL/types/Configuration';
+import { BackendRuntimeContext } from 'oak-frontend-base';
 import { AsyncContext, AsyncRowStore } from 'oak-domain/lib/store/AsyncRowStore';
 import { RelationAuth } from 'oak-domain/lib/store/RelationAuth';
 
 
-export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends AsyncContext<ED>> extends MysqlStore<ED, Cxt> implements AsyncRowStore<ED, Cxt> {
+export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends BackendRuntimeContext<ED>> extends MysqlStore<ED, Cxt> implements AsyncRowStore<ED, Cxt> {
     private executor: TriggerExecutor<ED>;
     private relationAuth: RelationAuth<ED>;
 

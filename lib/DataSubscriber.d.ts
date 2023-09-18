@@ -1,8 +1,8 @@
 import { EntityDict } from 'oak-domain/lib/types';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
-import { AsyncContext } from 'oak-domain/lib/store/AsyncRowStore';
+import { BackendRuntimeContext } from 'oak-frontend-base';
 import { Namespace } from 'socket.io';
-export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Context extends AsyncContext<ED>> {
+export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Context extends BackendRuntimeContext<ED>> {
     private ns;
     private contextBuilder;
     private filterMap;

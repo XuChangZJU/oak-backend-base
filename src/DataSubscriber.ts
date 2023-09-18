@@ -2,12 +2,12 @@ import assert from 'assert';
 import { unset } from 'oak-domain/lib/utils/lodash';
 import { EntityDict, SubDataDef, OpRecord, CreateOpResult, UpdateOpResult, RemoveOpResult } from 'oak-domain/lib/types';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
-import { AsyncContext } from 'oak-domain/lib/store/AsyncRowStore';
+import { BackendRuntimeContext } from 'oak-frontend-base';
 import { Namespace } from 'socket.io';
 import { checkFilterRepel } from 'oak-domain';
 
 
-export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Context extends AsyncContext<ED>> {
+export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Context extends BackendRuntimeContext<ED>> {
     private ns: Namespace;
     private contextBuilder: (scene?: string) => Promise<Context>;
     private filterMap: {
