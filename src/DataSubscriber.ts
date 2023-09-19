@@ -112,7 +112,7 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
         });
     }
 
-    private sendRecord(entity: keyof ED, filter: ED[keyof ED]['Selection']['filter'], record: OpRecord<ED>) {
+    private sendRecord(entity: keyof ED, filter: ED[keyof ED]['Selection']['filter'], record: OpRecord<ED>, sid?: string) {
         if (this.filterMap[entity]) {
             Object.keys(this.filterMap[entity]!).forEach(
                 async (room) => {
@@ -120,7 +120,12 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
                     const filter2 = this.filterMap[entity]![room];
                     const repeled = await checkFilterRepel(entity, context, filter, filter2, true)
                     if (!repeled) {
-                        this.ns.to(room).emit('data', [record], [room]);
+                        if (sid) {
+                            this.ns.to(room).except(sid).emit('data', [record], [room]);
+                        }
+                        else {
+                            this.ns.to(room).emit('data', [record], [room]);
+                        }
                     }
                 }
             );
@@ -128,7 +133,7 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
     }
 
     onDataCommited(context: Context) {
-        const userId = context.getCurrentUserId(true);
+        const sid = context.getSubscriberId();
         const { opRecords } = context;
         opRecords.forEach(
             (record) => {
@@ -136,17 +141,17 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
                 switch (a) {
                     case 'c': {
                         const { e, d } = record as CreateOpResult<ED, keyof ED>;
-                        this.sendRecord(e, d, record);
+                        this.sendRecord(e, d, record, sid);
                         break;
                     }
                     case 'u': {
                         const { e, d, f } = record as UpdateOpResult<ED, keyof ED>;
-                        this.sendRecord(e, f, record);
+                        this.sendRecord(e, f, record, sid);
                         break;
                     }
                     case 'r': {
                         const { e, f } = record as RemoveOpResult<ED, keyof ED>;
-                        this.sendRecord(e, f, record);
+                        this.sendRecord(e, f, record, sid);
                         break;
                     }
                     default: {
