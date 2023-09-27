@@ -52,54 +52,55 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
      */
     private startup() {
         this.ns.on('connection', async (socket) => {
-            const { 'oak-cxt': cxtStr } = socket.handshake.headers;
-            const context = await this.contextBuilder(cxtStr as string);
-            (socket as any).userId = context.getCurrentUserId();
-            (socket as any).context = context;
-            (socket as any).idMap = {};
-
-            socket.on('sub', async (data: SubDataDef<ED, keyof ED>[], callback) => {
-                try {
-                    await Promise.all(
-                        data.map(
-                            async (ele) => {
-                                const { id, entity, filter } = ele;
-                                // 尝试select此filter，如果失败说明权限越界
-                                await context.select(entity, {
-                                    data: {
-                                        id: 1,
-                                    },
-                                    filter,
-                                }, {});
-                            }
-                        )
+            try {
+                const { 'oak-cxt': cxtStr } = socket.handshake.headers;
+                const context = await this.contextBuilder(cxtStr as string);
+                (socket as any).userId = context.getCurrentUserId();
+                (socket as any).context = context;
+                (socket as any).idMap = {};
+                socket.on('sub', async (data: SubDataDef<ED, keyof ED>[]) => {
+                    try {
+                        await Promise.all(
+                            data.map(
+                                async (ele) => {
+                                    const { id, entity, filter } = ele;
+                                    // 尝试select此filter，如果失败说明权限越界
+                                    await context.select(entity, {
+                                        data: {
+                                            id: 1,
+                                        },
+                                        filter,
+                                    }, {});
+                                }
+                            )
+                        );
+                    }
+                    catch (err: any) {
+                        socket.emit('error', err.toString());
+                        return;
+                    }
+    
+                    data.forEach(
+                        (ele) => {
+                            const createRoomRoutine = this.formCreateRoomRoutine(ele);
+                            this.ns.adapter.on('create-room', createRoomRoutine);
+                            socket.join(ele.id);
+                            this.ns.adapter.off('create-room', createRoomRoutine);
+                        }
                     );
-                }
-                catch (err: any) {
-                    callback(err.toString());
-                    return;
-                }
-
-                data.forEach(
-                    (ele) => {
-                        const createRoomRoutine = this.formCreateRoomRoutine(ele);
-                        this.ns.adapter.on('create-room', createRoomRoutine);
-                        socket.join(ele.id);
-                        this.ns.adapter.off('create-room', createRoomRoutine);
-                    }
-                );
-                callback('');
-            });
-
-            socket.on('unsub', (ids: string[]) => {
-                ids.forEach(
-                    (id) => {
-                        socket.leave(id);
-                    }
-                );
-            });
-
-
+                });
+    
+                socket.on('unsub', (ids: string[]) => {
+                    ids.forEach(
+                        (id) => {
+                            socket.leave(id);
+                        }
+                    );
+                });
+            }
+            catch (err: any) {
+                socket.emit('error', err.toString());
+            }
         });
 
         this.ns.adapter.on('delete-room', (room) => {
