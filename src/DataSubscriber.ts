@@ -4,7 +4,7 @@ import { EntityDict, SubDataDef, OpRecord, CreateOpResult, UpdateOpResult, Remov
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { BackendRuntimeContext } from 'oak-frontend-base';
 import { Namespace } from 'socket.io';
-import { checkFilterRepel } from 'oak-domain';
+import { checkFilterContains, checkFilterRepel } from 'oak-domain';
 
 
 export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Context extends BackendRuntimeContext<ED>> {
@@ -113,14 +113,23 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
         });
     }
 
-    private sendRecord(entity: keyof ED, filter: ED[keyof ED]['Selection']['filter'], record: OpRecord<ED>, sid?: string) {
+    private sendRecord(entity: keyof ED, filter: ED[keyof ED]['Selection']['filter'], record: OpRecord<ED>, sid?: string, isCreate?: boolean) {
         if (this.filterMap[entity]) {
             Object.keys(this.filterMap[entity]!).forEach(
                 async (room) => {
                     const context = await this.contextBuilder();
                     const filter2 = this.filterMap[entity]![room];
-                    const repeled = await checkFilterRepel(entity, context, filter, filter2, true)
-                    if (!repeled) {
+                    let needSend = false;
+                    if (isCreate) {
+                        // 如果是插入数据肯定是单行，使用相容性检测
+                        const contained = await checkFilterContains(entity, context, filter, filter2, true);
+                        needSend = contained;
+                    }
+                    else {
+                        const repeled = await checkFilterRepel(entity, context, filter, filter2, true);
+                        needSend = !repeled;
+                    }
+                    if (needSend) {
                         if (sid) {
                             this.ns.to(room).except(sid).emit('data', [record], [room]);
                         }
@@ -142,7 +151,7 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
                 switch (a) {
                     case 'c': {
                         const { e, d } = record as CreateOpResult<ED, keyof ED>;
-                        this.sendRecord(e, d, record, sid);
+                        this.sendRecord(e, d, record, sid, true);
                         break;
                     }
                     case 'u': {
