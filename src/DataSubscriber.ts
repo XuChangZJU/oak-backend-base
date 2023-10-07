@@ -122,7 +122,7 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
                     let needSend = false;
                     if (isCreate) {
                         // 如果是插入数据肯定是单行，使用相容性检测
-                        const contained = await checkFilterContains(entity, context, filter, filter2, true);
+                        const contained = await checkFilterContains(entity, context, filter2, filter, true);
                         needSend = contained;
                     }
                     else {
