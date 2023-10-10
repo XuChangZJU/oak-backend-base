@@ -213,6 +213,14 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             }
             const duration = Date.now() - start;
             console.log(`第${count}次执行watchers，共执行${watchers.length}个，耗时${duration}毫秒`);
+            
+            const now = Date.now();
+            try {
+                await this.dbStore.checkpoint(process.env.NODE_ENV === 'development' ? now - 30 * 1000 : now - 120 * 1000);
+            }
+            catch (err) {
+                console.error(`执行了checkpoint，发生错误：`, err);
+            }            
 
             setTimeout(() => doWatchers(), 120000);
         };

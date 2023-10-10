@@ -14,4 +14,5 @@ export declare class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends
     count<T extends keyof ED>(entity: T, selection: Pick<ED[T]['Selection'], 'filter' | 'count'>, context: Cxt, option: SelectOption): Promise<number>;
     registerTrigger<T extends keyof ED>(trigger: Trigger<ED, T, Cxt>): void;
     registerChecker<T extends keyof ED>(checker: Checker<ED, T, Cxt>): void;
+    checkpoint(ts: number): Promise<number>;
 }
