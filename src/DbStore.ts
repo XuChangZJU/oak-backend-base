@@ -1,5 +1,5 @@
 import { MysqlStore, MySqlSelectOption, MysqlOperateOption } from 'oak-db';
-import { EntityDict, StorageSchema, Trigger, Checker, AuthDeduceRelationMap, SelectOption, AuthCascadePath } from 'oak-domain/lib/types';
+import { EntityDict, StorageSchema, Trigger, Checker, SelectOption, SelectFreeEntities, UpdateFreeDict, AuthDeduceRelationMap } from 'oak-domain/lib/types';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { TriggerExecutor } from 'oak-domain/lib/store/TriggerExecutor';
 import { MySQLConfiguration, } from 'oak-db/lib/MySQL/types/Configuration';
@@ -16,16 +16,12 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends Backend
         storageSchema: StorageSchema<ED>, 
         contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, 
         mysqlConfiguration: MySQLConfiguration,
-        actionCascadeGraph: AuthCascadePath<ED>[],
-        relationCascadeGraph: AuthCascadePath<ED>[],
         authDeduceRelationMap: AuthDeduceRelationMap<ED>,
-        selectFreeEntities: (keyof ED)[] = [],
-        createFreeEntities: (keyof ED)[] = [],
-        updateFreeEntities: (keyof ED)[] = []) {
+        selectFreeEntities: SelectFreeEntities<ED> = [],
+        updateFreeDict: UpdateFreeDict<ED> = {}) {
         super(storageSchema, mysqlConfiguration);
         this.executor = new TriggerExecutor((scene) => contextBuilder(scene)(this));
-        this.relationAuth = new RelationAuth(storageSchema, actionCascadeGraph, relationCascadeGraph,
-            authDeduceRelationMap, selectFreeEntities, createFreeEntities, updateFreeEntities);
+        this.relationAuth = new RelationAuth(storageSchema, authDeduceRelationMap, selectFreeEntities, updateFreeDict);
     }
 
     protected async cascadeUpdateAsync<T extends keyof ED>(entity: T, operation: ED[T]['Operation'], context: AsyncContext<ED>, option: MysqlOperateOption) {

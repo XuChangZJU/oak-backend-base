@@ -112,11 +112,10 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         super(path);
         const dbConfig: MySQLConfiguration = require(join(path, '/configuration/mysql.json'));
         const { storageSchema } = require(`${path}/lib/oak-app-domain/Storage`);
-        const { ActionCascadePathGraph, RelationCascadePathGraph, selectFreeEntities, createFreeEntities, updateFreeEntities, deducedRelationMap } = require(`${path}/lib/oak-app-domain/Relation`);
+        const { authDeduceRelationMap, selectFreeEntities, updateFreeDict } = require(`${path}/lib/config/relation`)
         this.externalDependencies = require(OAK_EXTERNAL_LIBS_FILEPATH(join(path, 'lib')));
         this.aspectDict = Object.assign({}, generalAspectDict, this.requireSth('lib/aspects/index'));
-        this.dbStore = new DbStore<ED, Cxt>(storageSchema, contextBuilder, dbConfig, ActionCascadePathGraph, RelationCascadePathGraph, deducedRelationMap,
-            selectFreeEntities, createFreeEntities, updateFreeEntities);
+        this.dbStore = new DbStore<ED, Cxt>(storageSchema, contextBuilder, dbConfig, authDeduceRelationMap, selectFreeEntities, updateFreeDict);
         if (ns) {
             this.dataSubscriber = new DataSubscriber(ns, (scene) => this.contextBuilder(scene)(this.dbStore));
             this.contextBuilder = (scene) => async (store) => {
