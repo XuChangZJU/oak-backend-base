@@ -306,20 +306,26 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         return this.dbStore;
     }
 
-    getEndpoints() {
+    getEndpoints(prefix: string) {
         const endpoints: Record<string, Endpoint<ED, Cxt>> = this.requireSth('lib/endpoints/index');
         const endPointRouters: Array<[EndpointItem<ED, Cxt>['name'], EndpointItem<ED, Cxt>['method'], string, (params: Record<string, string>, headers: IncomingHttpHeaders, req: IncomingMessage, body?: any) => Promise<any>]> = [];
         const endPointMap: Record<string, true> = {};
 
         const transformEndpointItem = (key: string, item: EndpointItem<ED, Cxt>) => {
-            const { name, method, fn } = item;
+            const { name, method, fn, params: itemParams } = item;
             const k = `${key}-${name}-${method}`;
             if (endPointMap[k]) {
                 throw new Error(`endpoint中，url为「${key}」、名为${name}的方法「${method}」存在重复定义`);
             }
             endPointMap[k] = true;
+            let url = `${prefix}/${key}`;
+            if (itemParams) {
+                for (const p of itemParams) {
+                    url += `/:${p}`;
+                }
+            }
             endPointRouters.push(
-                [name, method, key, async (params, headers, req, body) => {
+                [name, method, url, async (params, headers, req, body) => {
                     const context = await this.contextBuilder()(this.dbStore);
                     await context.begin();
                     try {
