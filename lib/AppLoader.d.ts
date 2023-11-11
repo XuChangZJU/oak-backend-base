@@ -24,7 +24,7 @@ export declare class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt exten
     }>;
     initialize(dropIfExists?: boolean): Promise<void>;
     getStore(): DbStore<ED, Cxt>;
-    getEndpoints(): [string, "get" | "post" | "put" | "delete", string, (params: Record<string, string>, headers: IncomingHttpHeaders, req: IncomingMessage, body?: any) => Promise<any>][];
+    getEndpoints(prefix: string): [string, "get" | "post" | "put" | "delete", string, (params: Record<string, string>, headers: IncomingHttpHeaders, req: IncomingMessage, body?: any) => Promise<any>][];
     startTimers(): void;
     execStartRoutines(): Promise<void>;
     execRoutine(routine: (context: Cxt) => Promise<void>): Promise<void>;
