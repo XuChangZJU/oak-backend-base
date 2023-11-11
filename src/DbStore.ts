@@ -26,11 +26,11 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends Backend
 
     protected async cascadeUpdateAsync<T extends keyof ED>(entity: T, operation: ED[T]['Operation'], context: AsyncContext<ED>, option: MysqlOperateOption) {
         // 如果是在modi处理过程中，所有的trigger也可以延时到apply时再处理（这时候因为modi中的数据并不实际存在，处理会有问题）
-        if (!option.blockTrigger && !option.modiParentEntity) {
+        if (!option.blockTrigger) {
             await this.executor.preOperation(entity, operation, context as Cxt, option);
         }
         const result = await super.cascadeUpdateAsync(entity, operation, context, option);
-        if (!option.blockTrigger && !option.modiParentEntity) {
+        if (!option.blockTrigger) {
             await this.executor.postOperation(entity, operation, context as Cxt, option);
         }
         return result;
