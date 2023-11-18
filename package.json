@@ -1,6 +1,6 @@
 {
     "name": "oak-backend-base",
-    "version": "3.1.2",
+    "version": "3.1.3",
     "description": "oak-backend-base",
     "main": "lib/index",
     "author": {
@@ -20,10 +20,10 @@
         "mysql": "^2.18.1",
         "mysql2": "^2.3.3",
         "node-schedule": "^2.1.0",
-        "oak-common-aspect": "^2.2.2",
-        "oak-frontend-base": "^3.0.5",
-        "oak-db": "^3.0.2",
-        "oak-domain": "^3.0.4",
+        "oak-common-aspect": "file:../oak-common-aspect",
+        "oak-frontend-base": "file:../oak-frontend-base",
+        "oak-db": "file:../oak-db",
+        "oak-domain": "file:../oak-domain",
         "socket.io": "^4.7.2",
         "uuid": "^8.3.2"
     },
