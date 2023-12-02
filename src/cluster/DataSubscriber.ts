@@ -27,7 +27,7 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
         const { id, entity, filter } = def;
         return (room: string) => {
             if (room === id) {
-                console.log('add filter', room);
+                console.log('instance:', process.env.NODE_APP_INSTANCE, 'add filter', room);
                 // 本房间不存在，说明这个filter是新出现的
                 if (this.filterMap[entity]) {
                     // id的唯一性由前台保证，重复则无视
@@ -60,6 +60,7 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
                 (socket as any).idMap = {};
                 socket.on('sub', async (data: SubDataDef<ED, keyof ED>[]) => {
                     try {
+                        console.log('instance:', process.env.NODE_APP_INSTANCE, 'on sub', JSON.stringify(data));
                         await Promise.all(
                             data.map(
                                 async (ele) => {
@@ -91,6 +92,7 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
                 });
     
                 socket.on('unsub', (ids: string[]) => {
+                    // console.log('instance:', process.env.NODE_APP_INSTANCE, 'on unsub', JSON.stringify(ids));
                     ids.forEach(
                         (id) => {
                             socket.leave(id);
@@ -106,14 +108,22 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
         this.ns.adapter.on('delete-room', (room) => {
             const entity = this.idEntityMap[room];
             if (entity) {
-                console.log('remove filter', room);
+                // console.log('instance:', process.env.NODE_APP_INSTANCE, 'remove filter', room);
                 unset(this.filterMap[entity], room);
                 unset(this.idEntityMap, room);
             }
         });
+
+        this.ns.on('sendRecord', (entity, filter, record, isCreate) => {
+            console.log('instance:', process.env.NODE_APP_INSTANCE, 'get record from another', JSON.stringify(entity));
+        });
     }
 
     private sendRecord(entity: keyof ED, filter: ED[keyof ED]['Selection']['filter'], record: OpRecord<ED>, sid?: string, isCreate?: boolean) {
+        if (entity === 'spContractApplyment') {
+            console.log('instance:', process.env.NODE_APP_INSTANCE, 'sendRecord', JSON.stringify(entity));
+        }
+        this.ns.serverSideEmit('sendRecord', entity, filter, record, isCreate);
         if (this.filterMap[entity]) {
             Object.keys(this.filterMap[entity]!).forEach(
                 async (room) => {
@@ -130,6 +140,7 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
                         needSend = !repeled;
                     }
                     if (needSend) {
+                        // console.log('instance:', process.env.NODE_APP_INSTANCE, 'needSend', JSON.stringify(room));
                         if (sid) {
                             this.ns.to(room).except(sid).emit('data', [record], [room]);
                         }

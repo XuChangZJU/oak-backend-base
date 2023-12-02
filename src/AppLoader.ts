@@ -16,7 +16,9 @@ import assert from 'assert';
 import { IncomingHttpHeaders, IncomingMessage } from 'http';
 import { Server as SocketIoServer, Namespace } from 'socket.io';
 
-import DataSubscriber from './DataSubscriber';
+import DataSubscriber from './cluster/DataSubscriber';
+import { ClusterInfo } from 'oak-domain/lib/types/Cluster';
+import { getClusterInfo } from './cluster/env';
 
 
 export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends BackendRuntimeContext<ED>> extends GeneralAppLoader<ED, Cxt> {
@@ -24,7 +26,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
     private aspectDict: Record<string, Aspect<ED, Cxt>>;
     private externalDependencies: string[];
     private dataSubscriber?: DataSubscriber<ED, Cxt>;
-    private contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>, header?: IncomingHttpHeaders) => Promise<Cxt>;
+    private contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>, header?: IncomingHttpHeaders, clusterInfo?: ClusterInfo) => Promise<Cxt>;
 
     private requireSth(filePath: string): any {
         const depFilePath = join(this.path, filePath);
@@ -108,7 +110,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         return sthOut;
     }
 
-    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>, header?: IncomingHttpHeaders) => Promise<Cxt>, ns?: Namespace) {
+    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>, header?: IncomingHttpHeaders, clusterInfo?: ClusterInfo) => Promise<Cxt>, ns?: Namespace) {
         super(path);
         const dbConfig: MySQLConfiguration = require(join(path, '/configuration/mysql.json'));
         const { storageSchema } = require(`${path}/lib/oak-app-domain/Storage`);
@@ -118,8 +120,8 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         this.dbStore = new DbStore<ED, Cxt>(storageSchema, contextBuilder, dbConfig, authDeduceRelationMap, selectFreeEntities, updateFreeDict);
         if (ns) {
             this.dataSubscriber = new DataSubscriber(ns, (scene) => this.contextBuilder(scene)(this.dbStore));
-            this.contextBuilder = (scene) => async (store) => {
-                const context = await contextBuilder(scene)(store);
+            this.contextBuilder = (scene) => async (store, header, clusterInfo) => {
+                const context = await contextBuilder(scene)(store, header, clusterInfo);
 
                 // 注入在提交前向dataSubscribe
                 const originCommit = context.commit;
@@ -167,7 +169,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         const doWatchers = async () => {
             count++;
             const start = Date.now();
-            const context = await this.contextBuilder()(this.dbStore);
+            const context = await this.contextBuilder()(this.dbStore, undefined, getClusterInfo());
             for (const w of totalWatchers) {
                 await context.begin();
                 try {
@@ -246,7 +248,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         result: any;
         message?: string;
     }> {
-        const context = await this.contextBuilder(contextString)(this.dbStore, header);
+        const context = await this.contextBuilder(contextString)(this.dbStore, header, getClusterInfo());
         const fn = this.aspectDict[name];
         if (!fn) {
             throw new Error(`不存在的接口名称: ${name}`);
@@ -326,7 +328,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             }
             endPointRouters.push(
                 [name, method, url, async (params, headers, req, body) => {
-                    const context = await this.contextBuilder()(this.dbStore);
+                    const context = await this.contextBuilder()(this.dbStore, headers, getClusterInfo());
                     await context.begin();
                     try {
                         const result = await fn(context, params, headers, req, body);
@@ -361,7 +363,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             const { cron, fn, name } = timer;
             scheduleJob(name, cron, async (date) => {
                 const start = Date.now();
-                const context = await this.contextBuilder()(this.dbStore);
+                const context = await this.contextBuilder()(this.dbStore, undefined, getClusterInfo());
                 await context.begin();
                 console.log(`定时器【${name}】开始执行，时间是【${date.toLocaleTimeString()}】`);
                 try {
@@ -381,7 +383,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         const routines = this.requireSth('lib/routines/start');
         for (const routine of routines) {
             const { name, fn } = routine;
-            const context = await this.contextBuilder()(this.dbStore);
+            const context = await this.contextBuilder()(this.dbStore, undefined, getClusterInfo());
             const start = Date.now();
             await context.begin();
             try {
@@ -397,7 +399,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
     }
 
     async execRoutine(routine: (context: Cxt) => Promise<void>) {
-        const context = await this.contextBuilder()(this.dbStore);
+        const context = await this.contextBuilder()(this.dbStore, undefined, getClusterInfo());
         await routine(context);
     }
 }
