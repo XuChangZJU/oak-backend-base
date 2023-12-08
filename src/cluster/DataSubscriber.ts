@@ -1,50 +1,25 @@
-import assert from 'assert';
-import { unset } from 'oak-domain/lib/utils/lodash';
-import { EntityDict, SubDataDef, OpRecord, CreateOpResult, UpdateOpResult, RemoveOpResult } from 'oak-domain/lib/types';
+import { EntityDict, OpRecord } from 'oak-domain/lib/types';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { BackendRuntimeContext } from 'oak-frontend-base';
 import { Namespace } from 'socket.io';
-import { checkFilterContains, checkFilterRepel } from 'oak-domain';
+import { getClusterInfo } from './env';
+/**
+ * 集群行为备忘：
+ * 当socket.io通过adapter在集群间通信时，测试行为如下（测试环境为pm2 + cluster-adapter，其它adpater启用时需要再测一次）：
+ * 1）当client连接到node1并join room1时，只有node1上会有create room事件（room结构本身在结点间并不共享）
+ * 2）当某一个node执行 .adapter.to('room1').emit()时，连接到任一结点的client均能收到消息（但使用room可以实现跨结点推包）
+ * 3) serverSideEmit执行时如果有callback，而不是所有的接收者都执行callback的话，会抛出一个异常（意味着不需要本结点来判定是否收到全部的返回值了）
+ */
 
 
 export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Context extends BackendRuntimeContext<ED>> {
     private ns: Namespace;
     private contextBuilder: (scene?: string) => Promise<Context>;
-    private filterMap: {
-        [k in keyof ED]?: Record<string, ED[keyof ED]['Selection']['filter']>;
-    }
-    private idEntityMap: Record<string, keyof ED>;
 
     constructor(ns: Namespace, contextBuilder: (scene?: string) => Promise<Context>) {
         this.ns = ns;
         this.contextBuilder = contextBuilder;
         this.startup();
-        this.filterMap = {};
-        this.idEntityMap = {};
-    }
-
-    private formCreateRoomRoutine(def: SubDataDef<ED, keyof ED>) {
-        const { id, entity, filter } = def;
-        return (room: string) => {
-            if (room === id) {
-                console.log('instance:', process.env.NODE_APP_INSTANCE, 'add filter', room);
-                // 本房间不存在，说明这个filter是新出现的
-                if (this.filterMap[entity]) {
-                    // id的唯一性由前台保证，重复则无视
-                    Object.assign(this.filterMap[entity]!, {
-                        [id]: filter,
-                    });
-                }
-                else {
-                    Object.assign(this.filterMap, {
-                        [entity]: {
-                            [id]: filter,
-                        }
-                    });
-                }
-                this.idEntityMap[id] = entity;
-            }
-        };
     }
 
     /**
@@ -53,47 +28,17 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
     private startup() {
         this.ns.on('connection', async (socket) => {
             try {
-                const { 'oak-cxt': cxtStr } = socket.handshake.headers;
-                const context = await this.contextBuilder(cxtStr as string);
-                (socket as any).userId = context.getCurrentUserId();
-                (socket as any).context = context;
-                (socket as any).idMap = {};
-                socket.on('sub', async (data: SubDataDef<ED, keyof ED>[]) => {
-                    try {
-                        console.log('instance:', process.env.NODE_APP_INSTANCE, 'on sub', JSON.stringify(data));
-                        await Promise.all(
-                            data.map(
-                                async (ele) => {
-                                    const { id, entity, filter } = ele;
-                                    // 尝试select此filter，如果失败说明权限越界
-                                    await context.select(entity, {
-                                        data: {
-                                            id: 1,
-                                        },
-                                        filter,
-                                    }, {});
-                                }
-                            )
-                        );
-                    }
-                    catch (err: any) {
-                        socket.emit('error', err.toString());
-                        return;
-                    }
-    
-                    data.forEach(
-                        (ele) => {
-                            const createRoomRoutine = this.formCreateRoomRoutine(ele);
-                            this.ns.adapter.on('create-room', createRoomRoutine);
-                            socket.join(ele.id);
-                            this.ns.adapter.off('create-room', createRoomRoutine);
-                        }
+                const { instanceId } = getClusterInfo();
+                console.log('on connection', instanceId);
+                socket.on('sub', async (events: string[]) => {
+                    events.forEach(
+                        (event) => socket.join(event)
                     );
                 });
     
-                socket.on('unsub', (ids: string[]) => {
+                socket.on('unsub', (events: string[]) => {
                     // console.log('instance:', process.env.NODE_APP_INSTANCE, 'on unsub', JSON.stringify(ids));
-                    ids.forEach(
+                    events.forEach(
                         (id) => {
                             socket.leave(id);
                         }
@@ -104,82 +49,16 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
                 socket.emit('error', err.toString());
             }
         });
-
-        this.ns.adapter.on('delete-room', (room) => {
-            const entity = this.idEntityMap[room];
-            if (entity) {
-                // console.log('instance:', process.env.NODE_APP_INSTANCE, 'remove filter', room);
-                unset(this.filterMap[entity], room);
-                unset(this.idEntityMap, room);
-            }
-        });
-
-        this.ns.on('sendRecord', (entity, filter, record, isCreate) => {
-            console.log('instance:', process.env.NODE_APP_INSTANCE, 'get record from another', JSON.stringify(entity));
-        });
     }
 
-    private sendRecord(entity: keyof ED, filter: ED[keyof ED]['Selection']['filter'], record: OpRecord<ED>, sid?: string, isCreate?: boolean) {
-        if (entity === 'spContractApplyment') {
-            console.log('instance:', process.env.NODE_APP_INSTANCE, 'sendRecord', JSON.stringify(entity));
+    publishEvent(event: string, records: OpRecord<ED>[], sid?: string) {
+        const { instanceId } = getClusterInfo();
+        console.log('publishEvent', instanceId);
+        if (sid) {
+            this.ns.to(event).except(sid).emit('data', records);
         }
-        this.ns.serverSideEmit('sendRecord', entity, filter, record, isCreate);
-        if (this.filterMap[entity]) {
-            Object.keys(this.filterMap[entity]!).forEach(
-                async (room) => {
-                    const context = await this.contextBuilder();
-                    const filter2 = this.filterMap[entity]![room];
-                    let needSend = false;
-                    if (isCreate) {
-                        // 如果是插入数据肯定是单行，使用相容性检测
-                        const contained = await checkFilterContains(entity, context, filter2, filter, true);
-                        needSend = contained;
-                    }
-                    else {
-                        const repeled = await checkFilterRepel(entity, context, filter, filter2, true);
-                        needSend = !repeled;
-                    }
-                    if (needSend) {
-                        // console.log('instance:', process.env.NODE_APP_INSTANCE, 'needSend', JSON.stringify(room));
-                        if (sid) {
-                            this.ns.to(room).except(sid).emit('data', [record], [room]);
-                        }
-                        else {
-                            this.ns.to(room).emit('data', [record], [room]);
-                        }
-                    }
-                }
-            );
+        else {
+            this.ns.to(event).emit('data', records);
         }
-    }
-
-    onDataCommited(context: Context) {
-        const sid = context.getSubscriberId();
-        const { opRecords } = context;
-        opRecords.forEach(
-            (record) => {
-                const { a } = record;
-                switch (a) {
-                    case 'c': {
-                        const { e, d } = record as CreateOpResult<ED, keyof ED>;
-                        this.sendRecord(e, d, record, sid, true);
-                        break;
-                    }
-                    case 'u': {
-                        const { e, d, f } = record as UpdateOpResult<ED, keyof ED>;
-                        this.sendRecord(e, f, record, sid);
-                        break;
-                    }
-                    case 'r': {
-                        const { e, f } = record as RemoveOpResult<ED, keyof ED>;
-                        this.sendRecord(e, f, record, sid);
-                        break;
-                    }
-                    default: {
-                        break;
-                    }
-                }
-            }
-        );
     }
 }

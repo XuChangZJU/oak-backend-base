@@ -14,13 +14,28 @@ function getProcessEnvOption(option: string) {
     }
 }
 
-// 初始化判定集群状态，目前支持pm2的集群信息
+// 初始化判定集群状态，需要在环境变量中注入两个值
+/** pm2注入方法，见：https://pm2.fenxianglu.cn/docs/general/environment-variables
+ * apps: [
+        {
+            name: 'xxx',
+            script: "xxxjs",
+            instances: "2",
+            increment_var: "OAK_INSTANCE_ID",
+            env: {
+                OAK_INSTANCE_CNT: 9,
+                OAK_INSTANCE_ID: 8,
+            }
+        },
+    ],
+**/
+
 function initialize() {
-    const pmId = getProcessEnvOption('NODE_APP_INSTANCE');
-    if (pmId) {
+    const instanceIdStr = getProcessEnvOption('OAK_INSTANCE_ID');
+    if (instanceIdStr) {
         const usingCluster = true;
-        const instanceId = parseInt(pmId);
-        const instanceCount = parseInt(getProcessEnvOption('instances')!);
+        const instanceId = parseInt(instanceIdStr);
+        const instanceCount = parseInt(getProcessEnvOption('OAK_INSTANCE_CNT')!);
         return {
             usingCluster,
             instanceCount,

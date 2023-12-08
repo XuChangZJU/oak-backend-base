@@ -3,10 +3,10 @@ import { join } from 'path';
 import { scheduleJob } from 'node-schedule';
 import { OAK_EXTERNAL_LIBS_FILEPATH } from 'oak-domain/lib/compiler/env';
 import { makeIntrinsicCTWs } from "oak-domain/lib/store/actionDef";
-import { intersection } from 'oak-domain/lib/utils/lodash';
+import { intersection, omit } from 'oak-domain/lib/utils/lodash';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { generateNewIdAsync } from 'oak-domain/lib/utils/uuid';
-import { AppLoader as GeneralAppLoader, Trigger, Checker, Aspect, RowStore, Context, EntityDict, Watcher, BBWatcher, WBWatcher, OpRecord } from "oak-domain/lib/types";
+import { AppLoader as GeneralAppLoader, Trigger, Checker, Aspect, CreateOpResult, Context, EntityDict, Watcher, BBWatcher, WBWatcher, OpRecord } from "oak-domain/lib/types";
 import { DbStore } from "./DbStore";
 import generalAspectDict, { clearPorts, registerPorts } from 'oak-common-aspect/lib/index';
 import { MySQLConfiguration } from 'oak-db/lib/MySQL/types/Configuration';
@@ -126,8 +126,20 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
                 // 注入在提交前向dataSubscribe
                 const originCommit = context.commit;
                 context.commit = async () => {
-                    this.dataSubscriber!.onDataCommited(context);
+                    const { eventOperationMap, opRecords } = context;
                     await originCommit.call(context);
+
+                    Object.keys(eventOperationMap).forEach(
+                        (event) => {
+                            const ids = eventOperationMap[event];
+
+                            const opRecordsToPublish = (opRecords as CreateOpResult<ED, keyof ED>[]).filter(
+                                (ele) => !!ele.id && ids.includes(ele.id)
+                            );
+                            assert(opRecordsToPublish.length === ids.length, '要推送的事件的operation数量不足，请检查确保');
+                            this.dataSubscriber!.publishEvent(event, opRecordsToPublish);
+                        }
+                    )
                 };
                 
                 return context;
@@ -259,7 +271,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             await context.commit();
             await context.refineOpRecords();
             return {
-                opRecords: context.opRecords,
+                opRecords: (context.opRecords as CreateOpResult<ED, keyof ED>[]).map(ele => omit(ele, 'id')),
                 message: context.getMessage(),
                 result,
             };
