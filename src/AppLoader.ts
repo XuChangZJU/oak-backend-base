@@ -144,7 +144,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
                                 (ele) => !!ele.id && ids.includes(ele.id)
                             );
                             assert(opRecordsToPublish.length === ids.length, '要推送的事件的operation数量不足，请检查确保');
-                            this.dataSubscriber!.publishEvent(event, opRecordsToPublish);
+                            this.dataSubscriber!.publishEvent(event, opRecordsToPublish, context.getSubscriberId());
                         }
                     )
                 };
