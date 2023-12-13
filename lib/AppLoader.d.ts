@@ -1,24 +1,24 @@
 /// <reference types="node" />
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
-import { AppLoader as GeneralAppLoader, EntityDict, OpRecord } from "oak-domain/lib/types";
+import { AppLoader as GeneralAppLoader, Trigger, EntityDict, Watcher, OpRecord } from "oak-domain/lib/types";
 import { DbStore } from "./DbStore";
 import { BackendRuntimeContext } from 'oak-frontend-base';
 import { IncomingHttpHeaders, IncomingMessage } from 'http';
 import { Namespace } from 'socket.io';
-import { ClusterInfo } from 'oak-domain/lib/types/Cluster';
 export declare class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends BackendRuntimeContext<ED>> extends GeneralAppLoader<ED, Cxt> {
-    private dbStore;
+    protected dbStore: DbStore<ED, Cxt>;
     private aspectDict;
     private externalDependencies;
     private dataSubscriber?;
-    private contextBuilder;
+    protected contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>;
     private requireSth;
-    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>, header?: IncomingHttpHeaders, clusterInfo?: ClusterInfo) => Promise<Cxt>, ns?: Namespace);
+    private makeContext;
+    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, ns?: Namespace);
+    protected registerTrigger(trigger: Trigger<ED, keyof ED, Cxt>): void;
     initTriggers(): void;
-    startWatchers(): void;
     mount(initialize?: true): Promise<void>;
     unmount(): Promise<void>;
-    execAspect(name: string, header?: IncomingHttpHeaders, contextString?: string, params?: any): Promise<{
+    execAspect(name: string, headers?: IncomingHttpHeaders, contextString?: string, params?: any): Promise<{
         opRecords: OpRecord<ED>[];
         result: any;
         message?: string;
@@ -26,6 +26,10 @@ export declare class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt exten
     initialize(dropIfExists?: boolean): Promise<void>;
     getStore(): DbStore<ED, Cxt>;
     getEndpoints(prefix: string): [string, "get" | "post" | "put" | "delete", string, (params: Record<string, string>, headers: IncomingHttpHeaders, req: IncomingMessage, body?: any) => Promise<any>][];
+    protected operateInWatcher<T extends keyof ED>(entity: T, operation: ED[T]['Update'], context: Cxt): Promise<import("oak-domain/lib/types").OperationResult<ED>>;
+    protected selectInWatcher<T extends keyof ED>(entity: T, selection: ED[T]['Selection'], context: Cxt): Promise<Partial<ED[T]["Schema"]>[]>;
+    protected execWatcher(watcher: Watcher<ED, keyof ED, Cxt>): Promise<void>;
+    startWatchers(): void;
     startTimers(): void;
     execStartRoutines(): Promise<void>;
     execRoutine(routine: (context: Cxt) => Promise<void>): Promise<void>;

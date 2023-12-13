@@ -1,5 +1,5 @@
 import { MysqlStore, MySqlSelectOption, MysqlOperateOption } from 'oak-db';
-import { EntityDict, StorageSchema, Trigger, Checker, SelectOption, SelectFreeEntities, UpdateFreeDict, AuthDeduceRelationMap } from 'oak-domain/lib/types';
+import { EntityDict, StorageSchema, Trigger, Checker, SelectOption, SelectFreeEntities, UpdateFreeDict, AuthDeduceRelationMap, VolatileTrigger, OperateOption } from 'oak-domain/lib/types';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { TriggerExecutor } from 'oak-domain/lib/store/TriggerExecutor';
 import { MySQLConfiguration, } from 'oak-db/lib/MySQL/types/Configuration';
@@ -18,9 +18,10 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends Backend
         mysqlConfiguration: MySQLConfiguration,
         authDeduceRelationMap: AuthDeduceRelationMap<ED>,
         selectFreeEntities: SelectFreeEntities<ED> = [],
-        updateFreeDict: UpdateFreeDict<ED> = {}) {
+        updateFreeDict: UpdateFreeDict<ED> = {},
+        onVolatileTrigger?: <T extends keyof ED>(entity: T, trigger: VolatileTrigger<ED, T, Cxt>, ids: string[], cxtStr: string, option: OperateOption) => Promise<void>) {
         super(storageSchema, mysqlConfiguration);
-        this.executor = new TriggerExecutor((scene) => contextBuilder(scene)(this));
+        this.executor = new TriggerExecutor((scene) => contextBuilder(scene)(this), undefined, onVolatileTrigger);
         this.relationAuth = new RelationAuth(storageSchema, authDeduceRelationMap, selectFreeEntities, updateFreeDict);
     }
 
@@ -139,6 +140,27 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends Backend
 
     registerChecker<T extends keyof ED>(checker: Checker<ED, T, Cxt>) {
         this.executor.registerChecker(checker);
+    }
+
+    setOnVolatileTrigger(
+        onVolatileTrigger: <T extends keyof ED>(
+            entity: T,
+            trigger: VolatileTrigger<ED, T, Cxt>, 
+            ids: string[], 
+            cxtStr: string,
+            option: OperateOption) => Promise<void>
+    ) {
+        this.executor.setOnVolatileTrigger(onVolatileTrigger);
+    }
+
+    async execVolatileTrigger<T extends keyof ED>(
+        entity: T,
+        name: string,
+        ids: string[],
+        context: Cxt,
+        option: OperateOption
+    ) {
+        return this.executor.execVolatileTrigger(entity, name, ids, context, option);
     }
 
     checkpoint(ts: number) {

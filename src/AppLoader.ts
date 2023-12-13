@@ -6,7 +6,7 @@ import { makeIntrinsicCTWs } from "oak-domain/lib/store/actionDef";
 import { intersection, omit } from 'oak-domain/lib/utils/lodash';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { generateNewIdAsync } from 'oak-domain/lib/utils/uuid';
-import { AppLoader as GeneralAppLoader, Trigger, Checker, Aspect, CreateOpResult, Context, EntityDict, Watcher, BBWatcher, WBWatcher, OpRecord } from "oak-domain/lib/types";
+import { AppLoader as GeneralAppLoader, Trigger, Checker, Aspect, CreateOpResult, Context, EntityDict, Watcher, BBWatcher, WBWatcher, OpRecord, Routine, FreeRoutine, Timer, FreeTimer, StorageSchema } from "oak-domain/lib/types";
 import { DbStore } from "./DbStore";
 import generalAspectDict, { clearPorts, registerPorts } from 'oak-common-aspect/lib/index';
 import { MySQLConfiguration } from 'oak-db/lib/MySQL/types/Configuration';
@@ -17,16 +17,15 @@ import { IncomingHttpHeaders, IncomingMessage } from 'http';
 import { Server as SocketIoServer, Namespace } from 'socket.io';
 
 import DataSubscriber from './cluster/DataSubscriber';
-import { ClusterInfo } from 'oak-domain/lib/types/Cluster';
 import { getClusterInfo } from './cluster/env';
 
 
 export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends BackendRuntimeContext<ED>> extends GeneralAppLoader<ED, Cxt> {
-    private dbStore: DbStore<ED, Cxt>;
+    protected dbStore: DbStore<ED, Cxt>;
     private aspectDict: Record<string, Aspect<ED, Cxt>>;
     private externalDependencies: string[];
     private dataSubscriber?: DataSubscriber<ED, Cxt>;
-    private contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>, header?: IncomingHttpHeaders, clusterInfo?: ClusterInfo) => Promise<Cxt>;
+    protected contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>;
 
     private requireSth(filePath: string): any {
         const depFilePath = join(this.path, filePath);
@@ -110,7 +109,15 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         return sthOut;
     }
 
-    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>, header?: IncomingHttpHeaders, clusterInfo?: ClusterInfo) => Promise<Cxt>, ns?: Namespace) {
+    private async makeContext(cxtStr?: string, headers?: IncomingHttpHeaders) {
+        const context = await this.contextBuilder(cxtStr)(this.dbStore);
+        context.clusterInfo = getClusterInfo();
+        context.headers = headers;
+        
+        return context;
+    }
+
+    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, ns?: Namespace) {
         super(path);
         const dbConfig: MySQLConfiguration = require(join(path, '/configuration/mysql.json'));
         const { storageSchema } = require(`${path}/lib/oak-app-domain/Storage`);
@@ -120,8 +127,8 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         this.dbStore = new DbStore<ED, Cxt>(storageSchema, contextBuilder, dbConfig, authDeduceRelationMap, selectFreeEntities, updateFreeDict);
         if (ns) {
             this.dataSubscriber = new DataSubscriber(ns, (scene) => this.contextBuilder(scene)(this.dbStore));
-            this.contextBuilder = (scene) => async (store, header, clusterInfo) => {
-                const context = await contextBuilder(scene)(store, header, clusterInfo);
+            this.contextBuilder = (scene) => async (store) => {
+                const context = await contextBuilder(scene)(store);
 
                 // 注入在提交前向dataSubscribe
                 const originCommit = context.commit;
@@ -150,94 +157,32 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         }
     }
 
+    protected registerTrigger(trigger: Trigger<ED, keyof ED, Cxt>) {
+        this.dbStore.registerTrigger(trigger);
+    }
+
     initTriggers() {
         const triggers = this.requireSth('lib/triggers/index');
         const checkers = this.requireSth('lib/checkers/index');
         const { ActionDefDict } = require(`${this.path}/lib/oak-app-domain/ActionDefDict`);
 
         const { triggers: adTriggers, checkers: adCheckers } = makeIntrinsicCTWs(this.dbStore.getSchema(), ActionDefDict);
+
         triggers.forEach(
-            (trigger: Trigger<ED, keyof ED, Cxt>) => this.dbStore.registerTrigger(trigger)
+            (trigger: Trigger<ED, keyof ED, Cxt>) => this.registerTrigger(trigger)
         );
+
         adTriggers.forEach(
-            (trigger) => this.dbStore.registerTrigger(trigger)
+            (trigger) => this.registerTrigger(trigger)
         );
+
         checkers.forEach(
             (checker: Checker<ED, keyof ED, Cxt>) => this.dbStore.registerChecker(checker)
         );
+
         adCheckers.forEach(
             (checker) => this.dbStore.registerChecker(checker)
         );
-    }
-
-    startWatchers() {
-        const watchers = this.requireSth('lib/watchers/index');
-        const { ActionDefDict } = require(`${this.path}/lib/oak-app-domain/ActionDefDict`);
-
-        const { watchers: adWatchers } = makeIntrinsicCTWs(this.dbStore.getSchema(), ActionDefDict);
-        const totalWatchers = (<Watcher<ED, keyof ED, Cxt>[]>watchers).concat(adWatchers);
-
-        let count = 0;
-        const doWatchers = async () => {
-            count++;
-            const start = Date.now();
-            const context = await this.contextBuilder()(this.dbStore, undefined, getClusterInfo());
-            for (const w of totalWatchers) {
-                await context.begin();
-                try {
-                    if (w.hasOwnProperty('actionData')) {
-                        const { entity, action, filter, actionData } = <BBWatcher<ED, keyof ED>>w;
-                        const filter2 = typeof filter === 'function' ? await filter() : filter;
-                        const data = typeof actionData === 'function' ? await (actionData as any)() : actionData;        // 这里有个奇怪的编译错误，不理解 by Xc
-                        const result = await this.dbStore.operate(entity, {
-                            id: await generateNewIdAsync(),
-                            action,
-                            data,
-                            filter: filter2
-                        }, context, {
-                            dontCollect: true,
-                        });
-
-                        console.log(`执行了watcher【${w.name}】，结果是：`, result);
-                    }
-                    else {
-                        const { entity, projection, fn, filter } = <WBWatcher<ED, keyof ED, Cxt>>w;
-                        const filter2 = typeof filter === 'function' ? await filter() : filter;
-                        const projection2 = typeof projection === 'function' ? await (projection as Function)() : projection;
-                        const rows = await this.dbStore.select(entity, {
-                            data: projection2 as any,
-                            filter: filter2,
-                        }, context, {
-                            dontCollect: true,
-                            blockTrigger: true,
-                        });
-
-                        if (rows.length > 0) {
-                            const result = await fn(context, rows);
-                            console.log(`执行了watcher【${w.name}】，结果是：`, result);
-                        }
-                    }
-                    await context.commit();
-                }
-                catch (err) {
-                    await context.rollback();
-                    console.error(`执行了watcher【${w.name}】，发生错误：`, err);
-                }
-            }
-            const duration = Date.now() - start;
-            console.log(`第${count}次执行watchers，共执行${watchers.length}个，耗时${duration}毫秒`);
-            
-            const now = Date.now();
-            try {
-                await this.dbStore.checkpoint(process.env.NODE_ENV === 'development' ? now - 30 * 1000 : now - 120 * 1000);
-            }
-            catch (err) {
-                console.error(`执行了checkpoint，发生错误：`, err);
-            }            
-
-            setTimeout(() => doWatchers(), 120000);
-        };
-        doWatchers();
     }
 
     async mount(initialize?: true) {
@@ -255,12 +200,13 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         this.dbStore.disconnect();
     }
 
-    async execAspect(name: string, header?: IncomingHttpHeaders, contextString?: string, params?: any): Promise<{
+    async execAspect(name: string, headers?: IncomingHttpHeaders, contextString?: string, params?: any): Promise<{
         opRecords: OpRecord<ED>[];
         result: any;
         message?: string;
     }> {
-        const context = await this.contextBuilder(contextString)(this.dbStore, header, getClusterInfo());
+        const context = await this.makeContext(contextString, headers);
+
         const fn = this.aspectDict[name];
         if (!fn) {
             throw new Error(`不存在的接口名称: ${name}`);
@@ -340,7 +286,8 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             }
             endPointRouters.push(
                 [name, method, url, async (params, headers, req, body) => {
-                    const context = await this.contextBuilder()(this.dbStore, headers, getClusterInfo());
+                    const context = await this.makeContext(undefined, headers);
+
                     await context.begin();
                     try {
                         const result = await fn(context, params, headers, req, body);
@@ -369,18 +316,106 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         return endPointRouters;
     }
 
+    protected operateInWatcher<T extends keyof ED>(entity: T, operation: ED[T]['Update'], context: Cxt) {
+        return  this.dbStore.operate(entity, operation, context, {
+            dontCollect: true,
+        });
+    }
+
+    protected  selectInWatcher<T extends keyof ED>(entity: T, selection: ED[T]['Selection'], context: Cxt) {
+        return this.dbStore.select(entity, selection, context, {
+            dontCollect: true,
+            blockTrigger: true,
+        })
+    }
+
+    protected async execWatcher(watcher: Watcher<ED, keyof ED, Cxt>) {
+        const context = await this.makeContext();
+        await context.begin();
+        try {
+            if (watcher.hasOwnProperty('actionData')) {
+                const { entity, action, filter, actionData } = <BBWatcher<ED, keyof ED>>watcher;
+                const filter2 = typeof filter === 'function' ? await filter() : filter;
+                const data = typeof actionData === 'function' ? await (actionData)() : actionData;
+                const result = await this.operateInWatcher(entity, {
+                    id: await generateNewIdAsync(),
+                    action,
+                    data,
+                    filter: filter2
+                }, context);
+
+                console.log(`执行了watcher【${watcher.name}】，结果是：`, result);
+            }
+            else {
+                const { entity, projection, fn, filter } = <WBWatcher<ED, keyof ED, Cxt>>watcher;
+                const filter2 = typeof filter === 'function' ? await filter() : filter;
+                const projection2 = typeof projection === 'function' ? await projection () : projection;
+                const rows = await this.selectInWatcher(entity, {
+                    data: projection2,
+                    filter: filter2,
+                }, context);
+
+                if (rows.length > 0) {
+                    const result = await fn(context, rows);
+                    console.log(`执行了watcher【${watcher.name}】，结果是：`, result);
+                }
+            }
+            await context.commit();
+        }
+        catch (err) {
+            await context.rollback();
+            console.error(`执行了watcher【${watcher.name}】，发生错误：`, err);
+        }
+    }
+
+    startWatchers() {
+        const watchers = this.requireSth('lib/watchers/index');
+        const { ActionDefDict } = require(`${this.path}/lib/oak-app-domain/ActionDefDict`);
+
+        const { watchers: adWatchers } = makeIntrinsicCTWs(this.dbStore.getSchema(), ActionDefDict);
+        const totalWatchers = (<Watcher<ED, keyof ED, Cxt>[]>watchers).concat(adWatchers);
+
+        let count = 0;
+        const doWatchers = async () => {
+            count++;
+            const start = Date.now();
+            for (const w of totalWatchers) {
+                await this.execWatcher(w);
+            }
+            const duration = Date.now() - start;
+            console.log(`第${count}次执行watchers，共执行${watchers.length}个，耗时${duration}毫秒`);
+            
+            const now = Date.now();
+            try {
+                await this.dbStore.checkpoint(process.env.NODE_ENV === 'development' ? now - 30 * 1000 : now - 120 * 1000);
+            }
+            catch (err) {
+                console.error(`执行了checkpoint，发生错误：`, err);
+            }            
+
+            setTimeout(() => doWatchers(), 120000);
+        };
+        doWatchers();
+    }
+
     startTimers() {
-        const timers = this.requireSth('lib/timers/index');
+        const timers: Timer<ED, keyof ED, Cxt>[] = this.requireSth('lib/timers/index');
         for (const timer of timers) {
-            const { cron, fn, name } = timer;
+            const { cron, name } = timer;
             scheduleJob(name, cron, async (date) => {
                 const start = Date.now();
-                const context = await this.contextBuilder()(this.dbStore, undefined, getClusterInfo());
+                const context = await this.makeContext();
                 await context.begin();
                 console.log(`定时器【${name}】开始执行，时间是【${date.toLocaleTimeString()}】`);
                 try {
-                    const result = await fn(context);
-                    console.log(`定时器【${name}】执行完成，耗时${Date.now() - start}毫秒，结果是【${result}】`);
+                    if (timer.hasOwnProperty('entity')) {
+                        await this.execWatcher(timer as Watcher<ED, keyof ED, Cxt>);
+                    }
+                    else {
+                        const { timer: timerFn } = timer as FreeTimer<ED, Cxt>;
+                        const result = await timerFn(context);
+                        console.log(`定时器【${name}】执行完成，耗时${Date.now() - start}毫秒，结果是【${result}】`);
+                    }
                     await context.commit();
                 }
                 catch (err) {
@@ -392,26 +427,33 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
     }
 
     async execStartRoutines() {
-        const routines = this.requireSth('lib/routines/start');
+        const routines: Routine<ED, keyof ED, Cxt>[] = this.requireSth('lib/routines/start');
         for (const routine of routines) {
-            const { name, fn } = routine;
-            const context = await this.contextBuilder()(this.dbStore, undefined, getClusterInfo());
-            const start = Date.now();
-            await context.begin();
-            try {
-                const result = await fn(context);
-                console.log(`例程【${name}】执行完成，耗时${Date.now() - start}毫秒，结果是【${result}】`);
-                await context.commit();
+            if (routine.hasOwnProperty('entity')) {
+                this.execWatcher(routine as Watcher<ED, keyof ED, Cxt>);
             }
-            catch (err) {
-                console.warn(`例程【${name}】执行失败，耗时${Date.now() - start}毫秒，错误是`, err);
-                await context.rollback();
+            else {
+                const { name, routine: routineFn } = routine as FreeRoutine<ED, Cxt>;
+                const context = await this.makeContext();
+    
+                const start = Date.now();
+                await context.begin();
+                try {
+                    const result = await routineFn(context);
+                    console.log(`例程【${name}】执行完成，耗时${Date.now() - start}毫秒，结果是【${result}】`);
+                    await context.commit();
+                }
+                catch (err) {
+                    console.warn(`例程【${name}】执行失败，耗时${Date.now() - start}毫秒，错误是`, err);
+                    await context.rollback();
+                }
             }
         }
     }
 
     async execRoutine(routine: (context: Cxt) => Promise<void>) {
-        const context = await this.contextBuilder()(this.dbStore, undefined, getClusterInfo());
+        const context = await this.makeContext();
+        
         await routine(context);
     }
 }
