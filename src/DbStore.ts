@@ -14,14 +14,14 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends Backend
 
     constructor(
         storageSchema: StorageSchema<ED>, 
-        contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, 
+        contextBuilder: (scene?: string) => Promise<Cxt>, 
         mysqlConfiguration: MySQLConfiguration,
         authDeduceRelationMap: AuthDeduceRelationMap<ED>,
         selectFreeEntities: SelectFreeEntities<ED> = [],
         updateFreeDict: UpdateFreeDict<ED> = {},
         onVolatileTrigger?: <T extends keyof ED>(entity: T, trigger: VolatileTrigger<ED, T, Cxt>, ids: string[], cxtStr: string, option: OperateOption) => Promise<void>) {
         super(storageSchema, mysqlConfiguration);
-        this.executor = new TriggerExecutor((scene) => contextBuilder(scene)(this), undefined, onVolatileTrigger);
+        this.executor = new TriggerExecutor((scene) => contextBuilder(scene), undefined, onVolatileTrigger);
         this.relationAuth = new RelationAuth(storageSchema, authDeduceRelationMap, selectFreeEntities, updateFreeDict);
     }
 

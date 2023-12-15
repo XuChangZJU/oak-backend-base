@@ -1,4 +1,4 @@
-import { EntityDict, OpRecord } from 'oak-domain/lib/types';
+import { EntityDict, OperateOption, OpRecord } from 'oak-domain/lib/types';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { BackendRuntimeContext } from 'oak-frontend-base';
 import { Namespace } from 'socket.io';
@@ -11,11 +11,13 @@ import { Namespace } from 'socket.io';
  */
 export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Context extends BackendRuntimeContext<ED>> {
     private ns;
+    private nsServer;
     private contextBuilder;
-    constructor(ns: Namespace, contextBuilder: (scene?: string) => Promise<Context>);
+    constructor(ns: Namespace, nsServer: Namespace, contextBuilder: (scene?: string) => Promise<Context>);
     /**
      * 来自外部的socket连接，监听数据变化
      */
     private startup;
     publishEvent(event: string, records: OpRecord<ED>[], sid?: string): void;
+    publishVolatileTrigger(entity: keyof ED, name: string, instanceNumber: string, ids: string[], cxtStr: string, option: OperateOption): void;
 }

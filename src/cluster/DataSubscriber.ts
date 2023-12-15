@@ -1,4 +1,4 @@
-import { EntityDict, OpRecord } from 'oak-domain/lib/types';
+import { EntityDict, OperateOption, OpRecord } from 'oak-domain/lib/types';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { BackendRuntimeContext } from 'oak-frontend-base';
 import { Namespace } from 'socket.io';
@@ -14,10 +14,12 @@ import { getClusterInfo } from './env';
 
 export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Context extends BackendRuntimeContext<ED>> {
     private ns: Namespace;
+    private nsServer: Namespace;
     private contextBuilder: (scene?: string) => Promise<Context>;
 
-    constructor(ns: Namespace, contextBuilder: (scene?: string) => Promise<Context>) {
+    constructor(ns: Namespace, nsServer: Namespace, contextBuilder: (scene?: string) => Promise<Context>) {
         this.ns = ns;
+        this.nsServer = nsServer;
         this.contextBuilder = contextBuilder;
         this.startup();
     }
@@ -29,8 +31,33 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
         this.ns.on('connection', async (socket) => {
             try {
                 const { instanceId } = getClusterInfo();
-                console.log('on connection', instanceId);
+                // console.log('on connection', instanceId);
                 socket.on('sub', async (events: string[]) => {
+                    events.forEach(
+                        (event) => socket.join(event)
+                    );
+                });
+    
+                socket.on('unsub', (events: string[]) => {
+                    // console.log('instance:', process.env.NODE_APP_INSTANCE, 'on unsub', JSON.stringify(ids));
+                    events.forEach(
+                        (id) => {
+                            socket.leave(id);
+                        }
+                    );
+                });
+            }
+            catch (err: any) {
+                socket.emit('error', err.toString());
+            }
+        });
+
+        this.nsServer.on('connection', async (socket) => {
+            try {
+                const { instanceId } = getClusterInfo();
+                console.log('on nsServer connection', instanceId);
+                socket.on('sub', async (events: string[]) => {
+                    console.log('on nsServer sub', instanceId, events);
                     events.forEach(
                         (event) => socket.join(event)
                     );
@@ -53,12 +80,18 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
 
     publishEvent(event: string, records: OpRecord<ED>[], sid?: string) {
         const { instanceId } = getClusterInfo();
-        console.log('publishEvent', instanceId);
+        // console.log('publishEvent', instanceId);
         if (sid) {
             this.ns.to(event).except(sid).emit('data', records);
         }
         else {
             this.ns.to(event).emit('data', records);
         }
+    }
+
+    publishVolatileTrigger(entity: keyof ED, name: string, instanceNumber: string, ids: string[], cxtStr: string, option: OperateOption) {
+        const { instanceId } = getClusterInfo();
+        console.log('publishVolatileTrigger', instanceId, instanceNumber);
+        this.nsServer.to(`${name}-${instanceNumber}`).emit('data', entity, name, ids, cxtStr, option);
     }
 }

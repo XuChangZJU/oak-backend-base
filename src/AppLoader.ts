@@ -24,7 +24,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
     protected dbStore: DbStore<ED, Cxt>;
     private aspectDict: Record<string, Aspect<ED, Cxt>>;
     private externalDependencies: string[];
-    private dataSubscriber?: DataSubscriber<ED, Cxt>;
+    protected dataSubscriber?: DataSubscriber<ED, Cxt>;
     protected contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>;
 
     private requireSth(filePath: string): any {
@@ -109,7 +109,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         return sthOut;
     }
 
-    private async makeContext(cxtStr?: string, headers?: IncomingHttpHeaders) {
+    protected async makeContext(cxtStr?: string, headers?: IncomingHttpHeaders) {
         const context = await this.contextBuilder(cxtStr)(this.dbStore);
         context.clusterInfo = getClusterInfo();
         context.headers = headers;
@@ -117,16 +117,17 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         return context;
     }
 
-    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, ns?: Namespace) {
+    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, ns?: Namespace, nsServer?: Namespace) {
         super(path);
         const dbConfig: MySQLConfiguration = require(join(path, '/configuration/mysql.json'));
         const { storageSchema } = require(`${path}/lib/oak-app-domain/Storage`);
         const { authDeduceRelationMap, selectFreeEntities, updateFreeDict } = require(`${path}/lib/config/relation`)
         this.externalDependencies = require(OAK_EXTERNAL_LIBS_FILEPATH(join(path, 'lib')));
         this.aspectDict = Object.assign({}, generalAspectDict, this.requireSth('lib/aspects/index'));
-        this.dbStore = new DbStore<ED, Cxt>(storageSchema, contextBuilder, dbConfig, authDeduceRelationMap, selectFreeEntities, updateFreeDict);
+        this.dbStore = new DbStore<ED, Cxt>(storageSchema, (cxtStr) => this.makeContext(cxtStr), dbConfig, authDeduceRelationMap, selectFreeEntities, updateFreeDict);
         if (ns) {
-            this.dataSubscriber = new DataSubscriber(ns, (scene) => this.contextBuilder(scene)(this.dbStore));
+            assert(nsServer);
+            this.dataSubscriber = new DataSubscriber(ns, nsServer, (scene) => this.contextBuilder(scene)(this.dbStore));
             this.contextBuilder = (scene) => async (store) => {
                 const context = await contextBuilder(scene)(store);
 
