@@ -215,10 +215,11 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         await context.begin();
         try {
             const result = await fn(params, context);
-            await context.commit();
             await context.refineOpRecords();
+            const { opRecords } = context;
+            await context.commit();
             return {
-                opRecords: (context.opRecords as CreateOpResult<ED, keyof ED>[]).map(ele => omit(ele, 'id')),
+                opRecords: (opRecords as CreateOpResult<ED, keyof ED>[]).map(ele => omit(ele, 'id')),
                 message: context.getMessage(),
                 result,
             };
