@@ -205,7 +205,8 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         result: any;
         message?: string;
     }> {
-        const context = await this.makeContext(contextString, headers);
+        // 从aspect过来的，不能有空cxtString，以防被误判为root
+        const context = await this.makeContext(contextString || '{}', headers);
 
         const fn = this.aspectDict[name];
         if (!fn) {
