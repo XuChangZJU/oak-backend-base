@@ -126,8 +126,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         this.aspectDict = Object.assign({}, generalAspectDict, this.requireSth('lib/aspects/index'));
         this.dbStore = new DbStore<ED, Cxt>(storageSchema, (cxtStr) => this.makeContext(cxtStr), dbConfig, authDeduceRelationMap, selectFreeEntities, updateFreeDict);
         if (ns) {
-            assert(nsServer);
-            this.dataSubscriber = new DataSubscriber(ns, nsServer, (scene) => this.contextBuilder(scene)(this.dbStore));
+            this.dataSubscriber = new DataSubscriber(ns, (scene) => this.contextBuilder(scene)(this.dbStore), nsServer);
             this.contextBuilder = (scene) => async (store) => {
                 const context = await contextBuilder(scene)(store);
 

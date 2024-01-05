@@ -11,9 +11,9 @@ import { Namespace } from 'socket.io';
  */
 export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Context extends BackendRuntimeContext<ED>> {
     private ns;
-    private nsServer;
+    private nsServer?;
     private contextBuilder;
-    constructor(ns: Namespace, nsServer: Namespace, contextBuilder: (scene?: string) => Promise<Context>);
+    constructor(ns: Namespace, contextBuilder: (scene?: string) => Promise<Context>, nsServer?: Namespace);
     /**
      * 来自外部的socket连接，监听数据变化
      */
