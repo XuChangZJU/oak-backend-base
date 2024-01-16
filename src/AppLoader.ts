@@ -113,7 +113,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         const context = await this.contextBuilder(cxtStr)(this.dbStore);
         context.clusterInfo = getClusterInfo();
         context.headers = headers;
-        
+
         return context;
     }
 
@@ -148,7 +148,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
                         }
                     )
                 };
-                
+
                 return context;
             }
         }
@@ -319,12 +319,12 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
     }
 
     protected operateInWatcher<T extends keyof ED>(entity: T, operation: ED[T]['Update'], context: Cxt) {
-        return  this.dbStore.operate(entity, operation, context, {
+        return this.dbStore.operate(entity, operation, context, {
             dontCollect: true,
         });
     }
 
-    protected  selectInWatcher<T extends keyof ED>(entity: T, selection: ED[T]['Selection'], context: Cxt) {
+    protected selectInWatcher<T extends keyof ED>(entity: T, selection: ED[T]['Selection'], context: Cxt) {
         return this.dbStore.select(entity, selection, context, {
             dontCollect: true,
             blockTrigger: true,
@@ -351,7 +351,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             else {
                 const { entity, projection, fn, filter } = <WBWatcher<ED, keyof ED, Cxt>>watcher;
                 const filter2 = typeof filter === 'function' ? await filter() : filter;
-                const projection2 = typeof projection === 'function' ? await projection () : projection;
+                const projection2 = typeof projection === 'function' ? await projection() : projection;
                 const rows = await this.selectInWatcher(entity, {
                     data: projection2,
                     filter: filter2,
@@ -386,14 +386,14 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             }
             const duration = Date.now() - start;
             console.log(`第${count}次执行watchers，共执行${watchers.length}个，耗时${duration}毫秒`);
-            
+
             const now = Date.now();
             try {
                 await this.dbStore.checkpoint(process.env.NODE_ENV === 'development' ? now - 30 * 1000 : now - 120 * 1000);
             }
             catch (err) {
                 console.error(`执行了checkpoint，发生错误：`, err);
-            }            
+            }
 
             setTimeout(() => doWatchers(), 120000);
         };
@@ -412,6 +412,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
                 try {
                     if (timer.hasOwnProperty('entity')) {
                         await this.execWatcher(timer as Watcher<ED, keyof ED, Cxt>);
+                        console.log(`定时器【${name}】执行完成，耗时${Date.now() - start}毫秒】`);
                     }
                     else {
                         const { timer: timerFn } = timer as FreeTimer<ED, Cxt>;
@@ -437,7 +438,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             else {
                 const { name, routine: routineFn } = routine as FreeRoutine<ED, Cxt>;
                 const context = await this.makeContext();
-    
+
                 const start = Date.now();
                 await context.begin();
                 try {
@@ -455,7 +456,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
 
     async execRoutine(routine: (context: Cxt) => Promise<void>) {
         const context = await this.makeContext();
-        
+
         await routine(context);
     }
 }
