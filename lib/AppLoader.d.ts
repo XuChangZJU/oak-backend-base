@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
-import { AppLoader as GeneralAppLoader, Trigger, EntityDict, Watcher, OpRecord } from "oak-domain/lib/types";
+import { AppLoader as GeneralAppLoader, Trigger, EntityDict, Watcher, OpRecord, OperationResult } from "oak-domain/lib/types";
 import { DbStore } from "./DbStore";
 import { BackendRuntimeContext } from 'oak-frontend-base';
 import { IncomingHttpHeaders, IncomingMessage } from 'http';
@@ -27,9 +27,9 @@ export declare class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt exten
     initialize(dropIfExists?: boolean): Promise<void>;
     getStore(): DbStore<ED, Cxt>;
     getEndpoints(prefix: string): [string, "get" | "post" | "put" | "delete", string, (params: Record<string, string>, headers: IncomingHttpHeaders, req: IncomingMessage, body?: any) => Promise<any>][];
-    protected operateInWatcher<T extends keyof ED>(entity: T, operation: ED[T]['Update'], context: Cxt): Promise<import("oak-domain/lib/types").OperationResult<ED>>;
+    protected operateInWatcher<T extends keyof ED>(entity: T, operation: ED[T]['Update'], context: Cxt): Promise<OperationResult<ED>>;
     protected selectInWatcher<T extends keyof ED>(entity: T, selection: ED[T]['Selection'], context: Cxt): Promise<Partial<ED[T]["Schema"]>[]>;
-    protected execWatcher(watcher: Watcher<ED, keyof ED, Cxt>): Promise<void>;
+    protected execWatcher(watcher: Watcher<ED, keyof ED, Cxt>): Promise<OperationResult<ED> | undefined>;
     startWatchers(): void;
     startTimers(): void;
     execStartRoutines(): Promise<void>;

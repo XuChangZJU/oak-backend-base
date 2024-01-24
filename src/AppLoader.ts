@@ -6,7 +6,7 @@ import { makeIntrinsicCTWs } from "oak-domain/lib/store/actionDef";
 import { intersection, omit } from 'oak-domain/lib/utils/lodash';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { generateNewIdAsync } from 'oak-domain/lib/utils/uuid';
-import { AppLoader as GeneralAppLoader, Trigger, Checker, Aspect, CreateOpResult, Context, EntityDict, Watcher, BBWatcher, WBWatcher, OpRecord, Routine, FreeRoutine, Timer, FreeTimer, StorageSchema } from "oak-domain/lib/types";
+import { AppLoader as GeneralAppLoader, Trigger, Checker, Aspect, CreateOpResult, Context, EntityDict, Watcher, BBWatcher, WBWatcher, OpRecord, Routine, FreeRoutine, Timer, FreeTimer, StorageSchema, OperationResult } from "oak-domain/lib/types";
 import { DbStore } from "./DbStore";
 import generalAspectDict, { clearPorts, registerPorts } from 'oak-common-aspect/lib/index';
 import { MySQLConfiguration } from 'oak-db/lib/MySQL/types/Configuration';
@@ -335,19 +335,18 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
     protected async execWatcher(watcher: Watcher<ED, keyof ED, Cxt>) {
         const context = await this.makeContext();
         await context.begin();
+        let result: OperationResult<ED> | undefined;
         try {
             if (watcher.hasOwnProperty('actionData')) {
                 const { entity, action, filter, actionData } = <BBWatcher<ED, keyof ED>>watcher;
                 const filter2 = typeof filter === 'function' ? await filter() : filter;
                 const data = typeof actionData === 'function' ? await (actionData)() : actionData;
-                const result = await this.operateInWatcher(entity, {
+                result = await this.operateInWatcher(entity, {
                     id: await generateNewIdAsync(),
                     action,
                     data,
                     filter: filter2
                 }, context);
-
-                console.log(`执行了watcher【${watcher.name}】，结果是：`, result);
             }
             else {
                 const { entity, projection, fn, filter } = <WBWatcher<ED, keyof ED, Cxt>>watcher;
@@ -359,15 +358,15 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
                 }, context);
 
                 if (rows.length > 0) {
-                    const result = await fn(context, rows);
-                    console.log(`执行了watcher【${watcher.name}】，结果是：`, result);
+                    result = await fn(context, rows);                
                 }
             }
             await context.commit();
+            return result;
         }
         catch (err) {
             await context.rollback();
-            console.error(`执行了watcher【${watcher.name}】，发生错误：`, err);
+            throw err;
         }
     }
 
@@ -379,11 +378,20 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         const totalWatchers = (<Watcher<ED, keyof ED, Cxt>[]>watchers).concat(adWatchers);
 
         let count = 0;
+        const execOne = async (watcher: Watcher<ED, keyof ED, Cxt>, start: number) => {
+            try {
+                const result = await this.execWatcher(watcher);
+                console.log(`执行watcher【${watcher.name}】成功，耗时【${Date.now() - start}】，结果是：`, result);
+            }
+            catch (err) {
+                console.error(`执行watcher【${watcher.name}】失败，耗时【${Date.now() - start}】，结果是：`, err);
+            }
+        };
         const doWatchers = async () => {
-            count++;
+            count ++;
             const start = Date.now();
             for (const w of totalWatchers) {
-                await this.execWatcher(w);
+                execOne(w, start);
             }
             const duration = Date.now() - start;
             console.log(`第${count}次执行watchers，共执行${watchers.length}个，耗时${duration}毫秒`);
@@ -407,24 +415,30 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             const { cron, name } = timer;
             scheduleJob(name, cron, async (date) => {
                 const start = Date.now();
-                const context = await this.makeContext();
-                await context.begin();
                 console.log(`定时器【${name}】开始执行，时间是【${date.toLocaleTimeString()}】`);
-                try {
-                    if (timer.hasOwnProperty('entity')) {
+
+                if (timer.hasOwnProperty('entity')) {
+                    try {
                         await this.execWatcher(timer as Watcher<ED, keyof ED, Cxt>);
-                        console.log(`定时器【${name}】执行完成，耗时${Date.now() - start}毫秒】`);
+                        console.log(`定时器【${name}】执行成功，耗时${Date.now() - start}毫秒】`);
                     }
-                    else {
+                    catch (err) {
+                        console.log(`定时器【${name}】执行成功，耗时${Date.now() - start}毫秒】，错误是`, err);
+                    }
+                }
+                else {
+                    const context = await this.makeContext();
+                    await context.begin();
+                    try {
                         const { timer: timerFn } = timer as FreeTimer<ED, Cxt>;
                         const result = await timerFn(context);
-                        console.log(`定时器【${name}】执行完成，耗时${Date.now() - start}毫秒，结果是【${result}】`);
+                        console.log(`定时器【${name}】执行成功，耗时${Date.now() - start}毫秒，结果是【${result}】`);
+                        await context.commit();
                     }
-                    await context.commit();
-                }
-                catch (err) {
-                    console.warn(`定时器【${name}】执行失败，耗时${Date.now() - start}毫秒，错误是`, err);
-                    await context.rollback();
+                    catch (err) {
+                        console.warn(`定时器【${name}】执行失败，耗时${Date.now() - start}毫秒，错误是`, err);
+                        await context.rollback();
+                    }
                 }
             })
         }
@@ -434,7 +448,15 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         const routines: Routine<ED, keyof ED, Cxt>[] = this.requireSth('lib/routines/start');
         for (const routine of routines) {
             if (routine.hasOwnProperty('entity')) {
-                this.execWatcher(routine as Watcher<ED, keyof ED, Cxt>);
+                const start = Date.now();
+                try {
+                    const result = await this.execWatcher(routine as Watcher<ED, keyof ED, Cxt>);
+                    console.warn(`例程【${routine.name}】执行成功，耗时${Date.now() - start}毫秒，结果是`, result);
+                }
+                catch (err) {
+                    console.warn(`例程【${routine.name}】执行失败，耗时${Date.now() - start}毫秒，错误是`, err);
+                    throw err;
+                }
             }
             else {
                 const { name, routine: routineFn } = routine as FreeRoutine<ED, Cxt>;
@@ -444,12 +466,13 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
                 await context.begin();
                 try {
                     const result = await routineFn(context);
-                    console.log(`例程【${name}】执行完成，耗时${Date.now() - start}毫秒，结果是【${result}】`);
+                    console.log(`例程【${name}】执行成功，耗时${Date.now() - start}毫秒，结果是【${result}】`);
                     await context.commit();
                 }
                 catch (err) {
                     console.warn(`例程【${name}】执行失败，耗时${Date.now() - start}毫秒，错误是`, err);
                     await context.rollback();
+                    throw err;
                 }
             }
         }
