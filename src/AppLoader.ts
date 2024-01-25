@@ -419,8 +419,8 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
 
                 if (timer.hasOwnProperty('entity')) {
                     try {
-                        await this.execWatcher(timer as Watcher<ED, keyof ED, Cxt>);
-                        console.log(`定时器【${name}】执行成功，耗时${Date.now() - start}毫秒】`);
+                        const result = await this.execWatcher(timer as Watcher<ED, keyof ED, Cxt>);
+                        console.log(`定时器【${name}】执行成功，耗时${Date.now() - start}毫秒】，结果是`, result);
                     }
                     catch (err) {
                         console.log(`定时器【${name}】执行成功，耗时${Date.now() - start}毫秒】，错误是`, err);
