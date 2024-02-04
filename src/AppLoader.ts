@@ -220,7 +220,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             const message = context.getMessage();
             await context.commit();
             return {
-                opRecords: (opRecords as CreateOpResult<ED, keyof ED>[]).map(ele => omit(ele, 'id')),
+                opRecords,
                 message,
                 result,
             };

@@ -85,10 +85,10 @@ export default class DataSubscriber<ED extends EntityDict & BaseEntityDict, Cont
         const { instanceId } = getClusterInfo();
         // console.log('publishEvent', instanceId);
         if (sid) {
-            this.ns.to(event).except(sid).emit('data', records);
+            this.ns.to(event).except(sid).emit('data', records, event);
         }
         else {
-            this.ns.to(event).emit('data', records);
+            this.ns.to(event).emit('data', records, event);
         }
     }
 
