@@ -232,6 +232,10 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
 
         if (this.synchronizer) {
             // 同步数据到远端结点通过commit trigger来完成
+            const syncTriggers = this.synchronizer.getSyncTriggers();
+            syncTriggers.forEach(
+                (trigger) => this.registerTrigger(trigger)
+            );
         }
     }
 
