@@ -18,6 +18,8 @@ import { Server as SocketIoServer, Namespace } from 'socket.io';
 
 import DataSubscriber from './cluster/DataSubscriber';
 import { getClusterInfo } from './cluster/env';
+import Synchronizer from './Synchronizer';
+import { SyncConfig } from './types/Sync';
 
 
 export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends BackendRuntimeContext<ED>> extends GeneralAppLoader<ED, Cxt> {
@@ -25,6 +27,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
     private aspectDict: Record<string, Aspect<ED, Cxt>>;
     private externalDependencies: string[];
     protected dataSubscriber?: DataSubscriber<ED, Cxt>;
+    protected synchronizer?: Synchronizer<ED, Cxt>;
     protected contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>;
 
     private requireSth(filePath: string): any {
@@ -117,7 +120,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         return context;
     }
 
-    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, ns?: Namespace, nsServer?: Namespace) {
+    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, ns?: Namespace, nsServer?: Namespace, syncConfig?: SyncConfig<ED, Cxt>) {
         super(path);
         const dbConfig: MySQLConfiguration = require(join(path, '/configuration/mysql.json'));
         const { storageSchema } = require(`${path}/lib/oak-app-domain/Storage`);
@@ -126,34 +129,77 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         this.aspectDict = Object.assign({}, generalAspectDict, this.requireSth('lib/aspects/index'));
         this.dbStore = new DbStore<ED, Cxt>(storageSchema, (cxtStr) => this.makeContext(cxtStr), dbConfig, authDeduceRelationMap, selectFreeEntities, updateFreeDict);
         if (ns) {
-            this.dataSubscriber = new DataSubscriber(ns, (scene) => this.contextBuilder(scene)(this.dbStore), nsServer);
-            this.contextBuilder = (scene) => async (store) => {
-                const context = await contextBuilder(scene)(store);
+            this.dataSubscriber = new DataSubscriber(ns, (scene) => this.contextBuilder(scene)(this.dbStore), nsServer);            
+        }
+        if (syncConfig) {
+            const {
+                self, remotes                
+            } = syncConfig;
+            
+            this.synchronizer = new Synchronizer({
+                self: {
+                    entity: self.entity,
+                    getSelfEncryptInfo:  async() => {
+                        const context = await contextBuilder()(this.dbStore);
+                        await context.begin();
+                        try {
+                            const result = await self.getSelfEncryptInfo(context);
+                            await context.commit();
+                            return result;
+                        }
+                        catch (err) {
+                            await context.rollback();
+                            throw err;
+                        }
+                    }
+                },
+                remotes: remotes.map(
+                    (r) => ({
+                        entity: r.entity,
+                        syncEntities: r.syncEntities,
+                        getRemoteAccessInfo: async (id) => {
+                            const context = await contextBuilder()(this.dbStore);
+                            await context.begin();
+                            try {
+                                const result = await r.getRemoteAccessInfo(id, context);
+                                await context.commit();
+                                return result;
+                            }
+                            catch (err) {
+                                await context.rollback();
+                                throw err;
+                            }
+                        }
+                    })
+                )
+            }, this.dbStore.getSchema());
+        }
 
-                // 注入在提交前向dataSubscribe
-                const originCommit = context.commit;
-                context.commit = async () => {
-                    const { eventOperationMap, opRecords } = context;
-                    await originCommit.call(context);
+        this.contextBuilder = (scene) => async (store) => {
+            const context = await contextBuilder(scene)(store);
 
+            const originCommit = context.commit;
+            context.commit = async () => {
+                const { eventOperationMap, opRecords } = context;
+                await originCommit.call(context);
+
+                // 注入在提交后向dataSubscribe发送订阅的事件
+                if (this.dataSubscriber) {
                     Object.keys(eventOperationMap).forEach(
                         (event) => {
                             const ids = eventOperationMap[event];
-
+    
                             const opRecordsToPublish = (opRecords as CreateOpResult<ED, keyof ED>[]).filter(
                                 (ele) => !!ele.id && ids.includes(ele.id)
                             );
                             assert(opRecordsToPublish.length === ids.length, '要推送的事件的operation数量不足，请检查确保');
                             this.dataSubscriber!.publishEvent(event, opRecordsToPublish, context.getSubscriberId());
                         }
-                    )
-                };
+                    );
+                }
+            };
 
-                return context;
-            }
-        }
-        else {
-            this.contextBuilder = contextBuilder;
+            return context;
         }
     }
 
@@ -183,6 +229,10 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         adCheckers.forEach(
             (checker) => this.dbStore.registerChecker(checker)
         );
+
+        if (this.synchronizer) {
+            // 同步数据到远端结点通过commit trigger来完成
+        }
     }
 
     async mount(initialize?: true) {
@@ -315,6 +365,11 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             else {
                 transformEndpointItem(router, item);
             }
+        }
+
+        if (this.synchronizer) {
+            const syncEp = this.synchronizer.getSelfEndpoint();
+            transformEndpointItem(syncEp.name, syncEp);
         }
         return endPointRouters;
     }
