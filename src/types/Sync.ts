@@ -4,14 +4,20 @@ import { BackendRuntimeContext } from 'oak-frontend-base';
 
 export type Algorithm = 'rsa' | 'ec' | 'ed25519';
 
-export type RemoteAccessInfo = {
+export type RemotePushInfo = {
     url: string;
-    publicKey: string;
     userId: string;
-    algorithm: Algorithm;
 };
 
-type SelfEncryptInfo = {
+export type RemotePullInfo = {
+    id: string;
+    publicKey: string;
+    algorithm: Algorithm;
+    userId: string;
+};
+
+export type SelfEncryptInfo = {
+    id: string;
     privateKey: string;
     algorithm: Algorithm;
 };
@@ -25,16 +31,19 @@ export interface SyncEntityDef<ED extends EntityDict & BaseEntityDict, T extends
 };
 
 interface SyncRemoteConfigBase<ED extends EntityDict & BaseEntityDict> {
-    endpoint?: string;              // 对方结点同步数据的endpoint，默认为/sync
-    syncEntities: Array<SyncEntityDef<ED, keyof ED>>;
+    entity: keyof ED;                                   // 对方结点所关联的entity名称
+    endpoint?: string;                                  // 对方结点同步数据的endpoint，默认为/sync/:entity
+    syncEntities: Array<SyncEntityDef<ED, keyof ED>>;   // 在这个entity上需要同步的entities
 };
 
 interface SyncRemoteConfigWrapper<ED extends EntityDict & BaseEntityDict> extends SyncRemoteConfigBase<ED> {
-    getRemoteAccessInfo: (userId: string) => Promise<RemoteAccessInfo>;
+    getRemotePushInfo: (userId: string) => Promise<RemotePushInfo>;
+    getRemotePullInfo: (id: string) => Promise<RemotePullInfo>;
 };
 
 interface SyncRemoteConfig<ED extends EntityDict & BaseEntityDict, Cxt extends BackendRuntimeContext<ED>> extends SyncRemoteConfigBase<ED> {
-    getRemoteAccessInfo: (userId: string, context: Cxt) => Promise<RemoteAccessInfo>;
+    getRemotePushInfo: (userId: string, context: Cxt) => Promise<RemotePushInfo>;
+    getRemotePullInfo: (id: string, context: Cxt) => Promise<RemotePullInfo>;
 };
 
 interface SyncSelfConfigBase<ED extends EntityDict & BaseEntityDict> {
