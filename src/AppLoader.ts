@@ -138,7 +138,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             
             this.synchronizer = new Synchronizer({
                 self: {
-                    entity: self.entity,
+                    // entity: self.entity,
                     getSelfEncryptInfo:  async() => {
                         const context = await contextBuilder()(this.dbStore);
                         await context.begin();
@@ -155,7 +155,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
                 },
                 remotes: remotes.map(
                     (r) => ({
-                        entity: r.entity,
+                        // entity: r.entity,
                         syncEntities: r.syncEntities,
                         getRemoteAccessInfo: async (id) => {
                             const context = await contextBuilder()(this.dbStore);
