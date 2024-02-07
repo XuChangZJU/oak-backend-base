@@ -155,13 +155,26 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
                 },
                 remotes: remotes.map(
                     (r) => ({
-                        // entity: r.entity,
+                        entity: r.entity,
                         syncEntities: r.syncEntities,
-                        getRemoteAccessInfo: async (id) => {
+                        getRemotePushInfo: async (id) => {
                             const context = await contextBuilder()(this.dbStore);
                             await context.begin();
                             try {
-                                const result = await r.getRemoteAccessInfo(id, context);
+                                const result = await r.getRemotePushInfo(id, context);
+                                await context.commit();
+                                return result;
+                            }
+                            catch (err) {
+                                await context.rollback();
+                                throw err;
+                            }
+                        },
+                        getRemotePullInfo: async (userId) => {
+                            const context = await contextBuilder()(this.dbStore);
+                            await context.begin();
+                            try {
+                                const result = await r.getRemotePullInfo(userId, context);
                                 await context.commit();
                                 return result;
                             }

@@ -3,7 +3,7 @@ import { VolatileTrigger } from 'oak-domain/lib/types/Trigger';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { destructRelationPath, destructDirectPath } from 'oak-domain/lib/utils/relationPath';
 import { BackendRuntimeContext } from 'oak-frontend-base';
-import { RemotePushInfo, SyncConfigWrapper, Algorithm, RemotePullInfo, SelfEncryptInfo } from './types/Sync';
+import { RemotePushInfo, SyncConfigWrapper, RemotePullInfo, SelfEncryptInfo } from './types/Sync';
 import { assert } from 'console';
 import { uniq } from 'oak-domain/lib/utils/lodash';
 
@@ -84,12 +84,13 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                     if (!this.remotePushChannel[userId]) {
                         const { url } = await getRemoteAccessInfo(userId);
                         this.remotePushChannel[userId] = {
-                            api: `${url}/${endpoint || 'sync'}`,
+                            // todo 规范化
+                            api: `${url}/endpoint/${endpoint || 'sync'}`,
                             queue: [],
                         };
                     }
                     const channel = this.remotePushChannel[userId];
-                    if (channel.remoteMaxTimestamp && oper.bornAt! < channel.remoteMaxTimestamp) {
+                    if (channel.remoteMaxTimestamp && oper.bornAt as number < channel.remoteMaxTimestamp) {
                         // 说明已经同步过了
                         return;
                     }
@@ -276,59 +277,94 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
         return [this.makeCreateOperTrigger()] as Array<VolatileTrigger<ED, keyof ED, Cxt>>;
     }
 
+    private async checkOperationConsistent(entity: keyof ED, ids: string[], bornAt: number) {
+
+    }
+
     getSelfEndpoint(): EndpointItem<ED, Cxt> {
         return {
             name: this.config.self.endpoint || 'sync',
             method: 'post',
+            params: ['entity'],
             fn: async (context, params, headers, req, body) => {
                 // body中是传过来的oper数组信息
                 const { entity } = params;
                 const {[OAK_SYNC_HEADER_ITEM]: id} = headers;
-                if (!this.remotePullInfoMap[entity]) {
-                    this.remotePullInfoMap[entity] = {};
-                }
-                if (!this.remotePullInfoMap[entity]![id as string]) {
-                    const { getRemotePullInfo } = this.config.remotes.find(ele => ele.entity === entity)!;
-                    this.remotePullInfoMap[entity]![id as string] = await getRemotePullInfo(id as string);
-                }
                 
-                const pullInfo = this.remotePullInfoMap[entity][id as string];
-                const { userId, algorithm, publicKey } = pullInfo;
-                // todo 解密
-
-                // 如果本次同步中有bornAt比本用户操作的最大的bornAt要小，则说明是重复更新，直接返回
-                const [ maxOper ] = await context.select('oper', {
-                    data: {
-                        id: 1,
-                        bornAt: 1,
-                    },
-                    filter: {
-                        operatorId: userId,
-                    },
-                    sorter: [
-                        {
-                            $attr: {
-                                bornAt: 1,
-                            },
-                            $direction: 'desc',
+                try {
+                    // todo 这里先缓存，不考虑本身同步相关信息的更新
+                    if (!this.remotePullInfoMap[entity]) {
+                        this.remotePullInfoMap[entity] = {};
+                    }
+                    if (!this.remotePullInfoMap[entity]![id as string]) {
+                        const { getRemotePullInfo } = this.config.remotes.find(ele => ele.entity === entity)!;
+                        this.remotePullInfoMap[entity]![id as string] = await getRemotePullInfo(id as string);
+                    }
+                    
+                    const pullInfo = this.remotePullInfoMap[entity][id as string];
+                    const { userId, algorithm, publicKey } = pullInfo;
+                    // todo 解密
+    
+                    // 如果本次同步中有bornAt比本用户操作的最大的bornAt要小，则说明是重复更新，直接返回
+                    const [ maxHisOper ] = await context.select('oper', {
+                        data: {
+                            id: 1,
+                            bornAt: 1,
                         },
-                    ],
-                    indexFrom: 0,
-                    count: 1,
-                }, { dontCollect: true });
-                
-                const opers = body as ED['oper']['Schema'][];
-                const legalOpers = maxOper ? opers.filter(
-                    ele => ele.bornAt > maxOper.bornAt
-                ) : opers;
-
-                if (legalOpers.length > 0) {
-
+                        filter: {
+                            operatorId: userId,
+                        },
+                        sorter: [
+                            {
+                                $attr: {
+                                    bornAt: 1,
+                                },
+                                $direction: 'desc',
+                            },
+                        ],
+                        indexFrom: 0,
+                        count: 1,
+                    }, { dontCollect: true });
+                    
+                    const opers = body as ED['oper']['Schema'][];
+                    const legalOpers = maxHisOper ? opers.filter(
+                        ele => ele.bornAt > maxHisOper.bornAt!
+                    ) : opers;
+    
+                    if (legalOpers.length > 0) {                    
+                        for (const oper of legalOpers) {
+                            const { id, targetEntity, action, data, bornAt, operEntity$oper: operEntities } = oper;
+                            const ids = operEntities!.map(ele => ele.id);
+    
+                            this.checkOperationConsistent(targetEntity, ids, bornAt as number);
+                            const operation: ED[keyof ED]['Operation'] = {
+                                id,
+                                data,
+                                action,
+                                filter: {
+                                    id: {
+                                        $in: ids,
+                                    },
+                                },
+                                bornAt: bornAt as number,
+                            };
+                            await context.operate(targetEntity, operation, {});
+                        }
+                        // 因为legalOpers就是排好序的，所以直接返回最后一项的bornAt
+                        return {
+                            timestamp: legalOpers[legalOpers.length - 1].bornAt,
+                        };
+                    }
+                    else {
+                        assert(maxHisOper);
+                        return {
+                            timestamp: maxHisOper.bornAt,
+                        };
+                    }
                 }
-                else {
-                    assert(maxOper);
+                catch (err) {
                     return {
-                        timestamp: maxOper.bornAt,
+                        error: JSON.stringify(err),
                     };
                 }
             }
