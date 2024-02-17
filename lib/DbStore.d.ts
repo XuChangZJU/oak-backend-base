@@ -2,7 +2,7 @@ import { MysqlStore, MySqlSelectOption, MysqlOperateOption } from 'oak-db';
 import { EntityDict, StorageSchema, Trigger, Checker, SelectOption, SelectFreeEntities, UpdateFreeDict, AuthDeduceRelationMap, VolatileTrigger, OperateOption } from 'oak-domain/lib/types';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { MySQLConfiguration } from 'oak-db/lib/MySQL/types/Configuration';
-import { BackendRuntimeContext } from 'oak-frontend-base';
+import { BackendRuntimeContext } from 'oak-frontend-base/lib/context/BackendRuntimeContext';
 import { AsyncContext, AsyncRowStore } from 'oak-domain/lib/store/AsyncRowStore';
 export declare class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends BackendRuntimeContext<ED>> extends MysqlStore<ED, Cxt> implements AsyncRowStore<ED, Cxt> {
     private executor;

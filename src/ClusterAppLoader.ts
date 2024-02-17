@@ -2,7 +2,7 @@ import { groupBy } from 'oak-domain/lib/utils/lodash';
 import { combineFilters } from 'oak-domain/lib/store/filter';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { EntityDict, OperationResult, VolatileTrigger, Trigger, OperateOption } from 'oak-domain/lib/types';
-import { BackendRuntimeContext } from 'oak-frontend-base';
+import { BackendRuntimeContext } from 'oak-frontend-base/lib/context/BackendRuntimeContext';
 import { getClusterInfo } from './cluster/env';
 
 import { AppLoader } from './AppLoader';

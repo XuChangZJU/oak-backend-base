@@ -1,6 +1,6 @@
 import { EntityDict, OperateOption, OpRecord } from 'oak-domain/lib/types';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
-import { BackendRuntimeContext } from 'oak-frontend-base';
+import { BackendRuntimeContext } from 'oak-frontend-base/lib/context/BackendRuntimeContext';
 import { Namespace } from 'socket.io';
 import { getClusterInfo } from './env';
 import { assert } from 'console';

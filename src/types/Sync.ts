@@ -1,8 +1,7 @@
 import { EntityDict } from 'oak-domain/lib/types';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
-import { BackendRuntimeContext } from 'oak-frontend-base';
-
-export type Algorithm = 'rsa' | 'ec' | 'ed25519';
+import { Algorithm } from 'oak-domain/lib/types/Sync';
+import { BackendRuntimeContext } from 'oak-frontend-base/lib/context/BackendRuntimeContext';
 
 export type RemotePushInfo = {
     url: string;

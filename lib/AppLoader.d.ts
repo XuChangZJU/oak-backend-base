@@ -2,7 +2,7 @@
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { AppLoader as GeneralAppLoader, Trigger, EntityDict, Watcher, OpRecord, OperationResult } from "oak-domain/lib/types";
 import { DbStore } from "./DbStore";
-import { BackendRuntimeContext } from 'oak-frontend-base';
+import { BackendRuntimeContext } from 'oak-frontend-base/lib/context/BackendRuntimeContext';
 import { IncomingHttpHeaders, IncomingMessage } from 'http';
 import { Namespace } from 'socket.io';
 import DataSubscriber from './cluster/DataSubscriber';

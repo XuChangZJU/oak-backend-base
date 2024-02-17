@@ -1,6 +1,6 @@
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { EntityDict, OperationResult, Trigger } from 'oak-domain/lib/types';
-import { BackendRuntimeContext } from 'oak-frontend-base';
+import { BackendRuntimeContext } from 'oak-frontend-base/lib/context/BackendRuntimeContext';
 import { AppLoader } from './AppLoader';
 import { DbStore } from './DbStore';
 import { Namespace } from 'socket.io';

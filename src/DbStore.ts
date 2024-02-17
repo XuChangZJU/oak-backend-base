@@ -3,7 +3,7 @@ import { EntityDict, StorageSchema, Trigger, Checker, SelectOption, SelectFreeEn
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { TriggerExecutor } from 'oak-domain/lib/store/TriggerExecutor';
 import { MySQLConfiguration, } from 'oak-db/lib/MySQL/types/Configuration';
-import { BackendRuntimeContext } from 'oak-frontend-base';
+import { BackendRuntimeContext } from 'oak-frontend-base/lib/context/BackendRuntimeContext';
 import { AsyncContext, AsyncRowStore } from 'oak-domain/lib/store/AsyncRowStore';
 import { RelationAuth } from 'oak-domain/lib/store/RelationAuth';
 

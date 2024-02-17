@@ -2,7 +2,7 @@ import { EntityDict, StorageSchema, EndpointItem } from 'oak-domain/lib/types';
 import { VolatileTrigger } from 'oak-domain/lib/types/Trigger';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { destructRelationPath, destructDirectPath } from 'oak-domain/lib/utils/relationPath';
-import { BackendRuntimeContext } from 'oak-frontend-base';
+import { BackendRuntimeContext } from 'oak-frontend-base/lib/context/BackendRuntimeContext';
 import { RemotePushInfo, SyncConfigWrapper, RemotePullInfo, SelfEncryptInfo } from './types/Sync';
 import { assert } from 'console';
 import { uniq } from 'oak-domain/lib/utils/lodash';

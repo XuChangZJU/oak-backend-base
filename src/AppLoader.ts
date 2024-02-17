@@ -10,7 +10,7 @@ import { AppLoader as GeneralAppLoader, Trigger, Checker, Aspect, CreateOpResult
 import { DbStore } from "./DbStore";
 import generalAspectDict, { clearPorts, registerPorts } from 'oak-common-aspect/lib/index';
 import { MySQLConfiguration } from 'oak-db/lib/MySQL/types/Configuration';
-import { BackendRuntimeContext } from 'oak-frontend-base';
+import { BackendRuntimeContext } from 'oak-frontend-base/lib/context/BackendRuntimeContext';
 import { Endpoint, EndpointItem } from 'oak-domain/lib/types/Endpoint';
 import assert from 'assert';
 import { IncomingHttpHeaders, IncomingMessage } from 'http';
