@@ -161,7 +161,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
                             const context = await contextBuilder()(this.dbStore);
                             await context.begin();
                             try {
-                                const result = await r.getRemotePushInfo(id, context);
+                                const result = await r.getPushInfo(id, context);
                                 await context.commit();
                                 return result;
                             }
@@ -174,7 +174,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
                             const context = await contextBuilder()(this.dbStore);
                             await context.begin();
                             try {
-                                const result = await r.getRemotePullInfo(userId, context);
+                                const result = await r.getPullInfo(userId, context);
                                 await context.commit();
                                 return result;
                             }
