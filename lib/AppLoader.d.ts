@@ -7,7 +7,6 @@ import { IncomingHttpHeaders, IncomingMessage } from 'http';
 import { Namespace } from 'socket.io';
 import DataSubscriber from './cluster/DataSubscriber';
 import Synchronizer from './Synchronizer';
-import { SyncConfig } from './types/Sync';
 export declare class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends BackendRuntimeContext<ED>> extends GeneralAppLoader<ED, Cxt> {
     protected dbStore: DbStore<ED, Cxt>;
     private aspectDict;
@@ -17,7 +16,11 @@ export declare class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt exten
     protected contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>;
     private requireSth;
     protected makeContext(cxtStr?: string, headers?: IncomingHttpHeaders): Promise<Cxt>;
-    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, ns?: Namespace, nsServer?: Namespace, syncConfig?: SyncConfig<ED, Cxt>);
+    /**
+     * 后台启动的configuration，统一放在这里读取
+     */
+    private getConfiguration;
+    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, ns?: Namespace, nsServer?: Namespace);
     protected registerTrigger(trigger: Trigger<ED, keyof ED, Cxt>): void;
     initTriggers(): void;
     mount(initialize?: true): Promise<void>;

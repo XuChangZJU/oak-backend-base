@@ -120,9 +120,24 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         return context;
     }
 
-    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, ns?: Namespace, nsServer?: Namespace, syncConfig?: SyncConfig<ED, Cxt>) {
+    /**
+     * 后台启动的configuration，统一放在这里读取
+     */
+    private getConfiguration() {
+        const dbConfigFile = join(this.path, 'configuration', 'mysql.json');
+        const dbConfig = require(dbConfigFile);
+        const syncConfigFile = join(this.path, 'lib', 'configuration', 'sync.js');
+        const syncConfig = existsSync(syncConfigFile) && require(syncConfigFile).default;
+
+        return {
+            dbConfig: dbConfig as MySQLConfiguration,
+            syncConfig: syncConfig as SyncConfig<ED, Cxt> | undefined,
+        };
+    }
+
+    constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, ns?: Namespace, nsServer?: Namespace) {
         super(path);
-        const dbConfig: MySQLConfiguration = require(join(path, '/configuration/mysql.json'));
+        const { dbConfig, syncConfig } = this.getConfiguration();
         const { storageSchema } = require(`${path}/lib/oak-app-domain/Storage`);
         const { authDeduceRelationMap, selectFreeEntities, updateFreeDict } = require(`${path}/lib/config/relation`)
         this.externalDependencies = require(OAK_EXTERNAL_LIBS_FILEPATH(join(path, 'lib')));
@@ -135,6 +150,8 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             const {
                 self, remotes                
             } = syncConfig;
+
+            const { getSelfEncryptInfo, ...restSelf } = self;
             
             this.synchronizer = new Synchronizer({
                 self: {
@@ -151,39 +168,42 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
                             await context.rollback();
                             throw err;
                         }
-                    }
+                    },
+                    ...restSelf
                 },
                 remotes: remotes.map(
-                    (r) => ({
-                        entity: r.entity,
-                        syncEntities: r.syncEntities,
-                        getRemotePushInfo: async (id) => {
-                            const context = await contextBuilder()(this.dbStore);
-                            await context.begin();
-                            try {
-                                const result = await r.getPushInfo(id, context);
-                                await context.commit();
-                                return result;
-                            }
-                            catch (err) {
-                                await context.rollback();
-                                throw err;
-                            }
-                        },
-                        getRemotePullInfo: async (userId) => {
-                            const context = await contextBuilder()(this.dbStore);
-                            await context.begin();
-                            try {
-                                const result = await r.getPullInfo(userId, context);
-                                await context.commit();
-                                return result;
-                            }
-                            catch (err) {
-                                await context.rollback();
-                                throw err;
-                            }
-                        }
-                    })
+                    (r) => {
+                        const { getPushInfo, getPullInfo, ...rest } = r;
+                        return {
+                            getRemotePushInfo: async (id) => {
+                                const context = await contextBuilder()(this.dbStore);
+                                await context.begin();
+                                try {
+                                    const result = await getPushInfo(id, context);
+                                    await context.commit();
+                                    return result;
+                                }
+                                catch (err) {
+                                    await context.rollback();
+                                    throw err;
+                                }
+                            },
+                            getRemotePullInfo: async (userId) => {
+                                const context = await contextBuilder()(this.dbStore);
+                                await context.begin();
+                                try {
+                                    const result = await getPullInfo(userId, context);
+                                    await context.commit();
+                                    return result;
+                                }
+                                catch (err) {
+                                    await context.rollback();
+                                    throw err;
+                                }
+                            },
+                            ...rest,
+                        };
+                    }
                 )
             }, this.dbStore.getSchema());
         }
