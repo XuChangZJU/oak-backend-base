@@ -5,67 +5,22 @@ import { destructRelationPath, destructDirectPath } from 'oak-domain/lib/utils/r
 import { BackendRuntimeContext } from 'oak-frontend-base/lib/context/BackendRuntimeContext';
 import assert from 'assert';
 import { join } from 'path';
-import { uniq } from 'oak-domain/lib/utils/lodash';
+import { difference } from 'oak-domain/lib/utils/lodash';
 import { SyncConfigWrapper } from './types/Sync';
 import { getRelevantIds } from 'oak-domain/lib/store/filter';
 
 const OAK_SYNC_HEADER_ITEM = 'oak-sync-remote-id';
 
 type Channel<ED extends EntityDict & BaseEntityDict> = {
-    remoteMaxTimestamp?: number;                            // 远端已经接受的最大时间戳
     queue: Array<{
         resolve: () => void;
         reject: (err: any) => void;
         oper: Partial<ED['oper']['Schema']>;
     }>;            // 要推送的oper队列
     api: string;                                            // 推送的api
-    lastPushTimestamp?: number;                             // 最后一次推送的时间戳
+    nextPushTimestamp?: number;                             // 下一次推送的时间戳
     handler?: ReturnType<typeof setTimeout>;                // 推送定时器
 };
-
-
-async function pushRequestOnChannel<ED extends EntityDict & BaseEntityDict>(channel: Channel<ED>, selfEncryptInfo: SelfEncryptInfo) {
-    const { queue, api } = channel;
-    channel.queue = [];
-    channel.lastPushTimestamp = Date.now();
-    channel.handler = undefined;
-
-    const opers = queue.map(ele => ele.oper);
-    try {
-        // todo 加密
-        console.log('向远端结点sync数据', api, JSON.stringify(opers));
-        const res = await fetch(api, {
-            method: 'post',
-            headers: {
-                'Content-Type': 'application/json',
-                [OAK_SYNC_HEADER_ITEM]: selfEncryptInfo.id,
-            },
-            body: JSON.stringify(opers),
-        });
-
-        if (res.status !== 200) {
-            throw new Error(`访问api「${api}」的结果不是200。「${res.status}」`);
-        }
-        const json = await res.json();
-
-        const { timestamp, error } = json;
-        if (error) {
-            throw new Error(`访问api「${api}」的结果出错，是${error}`);
-        }
-        if (!channel.remoteMaxTimestamp || channel.remoteMaxTimestamp < timestamp) {
-            channel.remoteMaxTimestamp = timestamp;
-        }
-
-        queue.forEach(
-            (ele) => ele.resolve()
-        );
-    }
-    catch (err: any) {
-        queue.forEach(
-            ({ reject }) => reject(err)
-        );
-    }
-}
 
 export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt extends BackendRuntimeContext<ED>> {
     private config: SyncConfigWrapper<ED, Cxt>;
@@ -75,45 +30,159 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
         pullInfo: RemotePullInfo,
         pullEntityDict: Record<string, PullEntityDef<ED, keyof ED, Cxt>>;
     }>> = {};
+    private pullMaxBornAtMap: Record<string, number> = {};
 
     private remotePushChannel: Record<string, Channel<ED>> = {};
 
+    /**
+     * 向某一个远端对象push opers。根据幂等性，这里如果失败了必须反复推送
+     * @param channel 
+     * @param retry 
+     */
+    private async pushOnChannel(channel: Channel<ED>, retry?: number) {
+        const { queue, api, nextPushTimestamp } = channel;
+        assert(nextPushTimestamp);
+
+        // 失败重试的间隔，失败次数多了应当适当延长，最多延长到1024秒
+        let nextPushTimestamp2 = typeof retry === 'number' ? Math.pow(2, Math.min(retry, 10)) : 1;
+        channel.nextPushTimestamp = nextPushTimestamp2 * 1000 + Date.now();
+
+        assert(this.selfEncryptInfo);
+        const opers = queue.map(ele => ele.oper);
+
+        let restOpers = [] as typeof queue;
+        let needRetry = false;
+        let json: {
+            successIds: string[], failed: {
+                id: string;
+                error: string;
+            }
+        };
+        try {
+            // todo 加密
+            console.log('向远端结点sync数据', api, JSON.stringify(opers));
+            const res = await fetch(api, {
+                method: 'post',
+                headers: {
+                    'Content-Type': 'application/json',
+                    [OAK_SYNC_HEADER_ITEM]: this.selfEncryptInfo!.id,
+                },
+                body: JSON.stringify(opers),
+            });
+
+            if (res.status !== 200) {
+                throw new Error(`sync数据时，访问api「${api}」的结果不是200。「${res.status}」`);
+            }
+            json = await res.json();
+        }
+        catch (err: any) {
+            console.error('sync push时出现error', err);
+            needRetry = true;
+            restOpers = queue;
+        }
+
+        if (!needRetry) {
+            /**
+             * 返回结构见this.getSelfEndpoint
+             */
+            const { successIds, failed } = json!;
+            if (failed) {
+                needRetry = true;
+                const {
+                    id, error
+                } = failed;
+                console.error('同步过程中发生异常', id, error);
+            }
+            for (const req of queue) {
+                if (successIds.includes(req.oper.id!)) {
+                    req.resolve();
+                }
+                else {
+                    restOpers.push(req);
+                }
+            }
+        }
+
+        if (restOpers.length > 0) {
+            const interval = Math.max(0, channel.nextPushTimestamp - Date.now());
+            const retry2 = needRetry ? (typeof retry === 'number' ? retry + 1 : 1) : undefined;
+            console.log('need retry', retry2);
+            setTimeout(() => this.pushOnChannel(channel, retry2), interval);
+        }
+        else {
+            channel.handler = undefined;
+            channel.nextPushTimestamp = undefined;
+        }
+    }
+
     // 将产生的oper推送到远端Node。注意要尽量在本地阻止重复推送
+    /** 
+     * 推向远端Node的oper，需要严格保证按产生的时间序推送。根据幂等原理，这里必须要推送成功
+     * 因此在这里要实现两点：
+     * 1）oper如果推送失败了，必须留存在queue中，以保证在后面产生的oper之前推送
+     * 2）当对queue中增加oper时，要检查是否有重（有重说明之前失败过），如果无重则将之放置在队列尾
+     * 
+     * 其实这里还无法严格保证先产生的oper一定先到达被推送，因为volatile trigger是在事务提交后再发生的，但这种情况在目前应该跑不出来，在实际执行oper的时候assert掉先。by Xc 20240226
+     */
     private async pushOper(
         oper: Partial<ED['oper']['Schema']>,
         userId: string,
         url: string,
-        endpoint: string) {
+        endpoint: string,
+        nextPushTimestamp?: number
+    ) {
         if (!this.remotePushChannel[userId]) {
             this.remotePushChannel[userId] = {
-                // todo 规范化
                 api: join(url, 'endpoint', endpoint),
                 queue: [],
             };
         }
         const channel = this.remotePushChannel[userId];
-        if (channel.remoteMaxTimestamp && oper.bornAt as number < channel.remoteMaxTimestamp) {
-            // 说明已经同步过了
-            return;
-        }
 
-        const waiter = new Promise<void>(
-            (resolve, reject) => {
-                channel.queue.push({
-                    oper,
-                    resolve,
-                    reject
-                });
+        // 要去重且有序
+        let existed = false;
+        let idx = 0;
+        for (; idx < channel.queue.length; idx++) {
+            if (channel.queue[idx].oper.id === oper.id) {
+                existed = true;
+                break;
             }
-        );
-        if (!channel.handler) {
-            channel.handler = setTimeout(async () => {
-                assert(this.selfEncryptInfo);
-                await pushRequestOnChannel(channel, this.selfEncryptInfo!);
-            }, 1000);       // 1秒钟集中同步一次
+            else if (channel.queue[idx].oper.bornAt! > oper.bornAt!) {
+                break;
+            }
         }
+        if (!existed) {
+            const now = Date.now();
+            const nextPushTimestamp2 = nextPushTimestamp || now + 1000;
+            const waiter = new Promise<void>(
+                (resolve, reject) => {
+                    if (!existed) {
+                        channel.queue.splice(idx, 0, {
+                            oper,
+                            resolve,
+                            reject,
+                        });
+                    }
+                }
+            );
+            if (!channel.handler) {
+                channel.nextPushTimestamp = nextPushTimestamp2;
+                channel.handler = setTimeout(async () => {
+                    assert(this.selfEncryptInfo);
+                    await this.pushOnChannel(channel);
+                }, nextPushTimestamp2 - now);
+            }
+            else if (channel.nextPushTimestamp && channel.nextPushTimestamp > nextPushTimestamp2) {
+                // 当前队列的开始时间要晚于自身的要求，要求提前开始
+                channel.nextPushTimestamp = nextPushTimestamp2;
+            }
 
-        await waiter;
+            await waiter;
+        }
+        else {
+            // 感觉应该跑不出来
+            console.warn('在sync数据时，遇到了重复推送的oper', JSON.stringify(oper), userId, url);
+        }
     }
 
     private async loadPublicKey() {
@@ -240,7 +309,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                     filter: {
                         id: ids[0],
                     }
-                }, { dontCollect: true });
+                }, { dontCollect: true, forUpdate: true });
                 const { operatorId, targetEntity, operEntity$oper: operEntities, action, data } = oper;
                 const entityIds = operEntities!.map(
                     ele => ele.entityId!
@@ -253,12 +322,8 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                         pushEntityNodes.map(
                             async (node) => {
                                 const { projection, groupByUsers, getRemotePushInfo: getRemoteAccessInfo, endpoint, entity, actions, onSynchronized } = node;
-                                if (!actions || actions.includes(action!)) {                   
-                                    const pushed = [] as Promise<{ 
-                                        userId: string, 
-                                        rowIds: string[],
-                                        error?: Error,
-                                    }>[];
+                                if (!actions || actions.includes(action!)) {
+                                    const pushed = [] as Promise<void>[];
                                     const rows = await context.select(targetEntity!, {
                                         data: {
                                             id: 1,
@@ -270,7 +335,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                                             },
                                         },
                                     }, { dontCollect: true, includedDeleted: true });
-    
+
                                     // userId就是需要发送给远端的user，但是要将本次操作的user过滤掉（操作的原本产生者）
                                     const userSendDict = groupByUsers(rows);
                                     const pushToUserIdFn = async (userId: string) => {
@@ -289,20 +354,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                                             targetEntity,
                                         };
                                         const { url } = await getRemoteAccessInfo(userId);
-                                        try {
-                                            await this.pushOper(oper2 as any /** 这里不明白为什么过不去 */, userId, url, endpoint);
-                                            return {
-                                                userId,
-                                                rowIds,
-                                            };
-                                        }
-                                        catch (err: any) {
-                                            return {
-                                                userId,
-                                                rowIds,
-                                                error: err as Error,
-                                            };
-                                        }
+                                        await this.pushOper(oper2 as any /** 这里不明白为什么TS过不去 */, userId, url, endpoint);
                                     };
                                     for (const userId in userSendDict) {
                                         if (userId !== operatorId) {
@@ -311,22 +363,13 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                                     }
 
                                     if (pushed.length > 0) {
-                                        const result = await Promise.all(pushed);
+                                        await Promise.all(pushed);
                                         if (onSynchronized) {
                                             await onSynchronized({
                                                 action: action!,
                                                 data: data!,
-                                                result,
+                                                rowIds: entityIds,
                                             }, context);
-                                        }
-                                        else {
-                                            const errResult = result.find(
-                                                ele => !!ele.error
-                                            );
-                                            if (errResult) {
-                                                console.error('同步数据时出错', errResult.userId, errResult.rowIds, errResult.error);
-                                                throw errResult.error;
-                                            }
                                         }
                                     }
                                 }
@@ -366,38 +409,47 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
             name: this.config.self.endpoint || 'sync',
             method: 'post',
             params: ['entity'],
-            fn: async (context, params, headers, req, body) => {
+            fn: async (context, params, headers, req, body): Promise<{
+                successIds: string[],
+                failed?: {
+                    id: string;
+                    error: string;
+                };
+            }> => {
                 // body中是传过来的oper数组信息
                 const { entity } = params;
                 const { [OAK_SYNC_HEADER_ITEM]: id } = headers;
 
                 console.log('接收到来自远端的sync数据', entity, JSON.stringify(body));
-                try {
-                    // todo 这里先缓存，不考虑本身同步相关信息的更新
-                    if (!this.remotePullInfoMap[entity]) {
-                        this.remotePullInfoMap[entity] = {};
+                const successIds = [] as string[];
+                let failed: {
+                    id: string;
+                    error: string;
+                } | undefined;
+                // todo 这里先缓存，不考虑本身同步相关信息的更新
+                if (!this.remotePullInfoMap[entity]) {
+                    this.remotePullInfoMap[entity] = {};
+                }
+                if (!this.remotePullInfoMap[entity]![id as string]) {
+                    const { getRemotePullInfo, pullEntities } = this.config.remotes.find(ele => ele.entity === entity)!;
+                    const pullEntityDict = {} as Record<string, PullEntityDef<ED, keyof ED, Cxt>>;
+                    if (pullEntities) {
+                        pullEntities.forEach(
+                            (def) => pullEntityDict[def.entity as string] = def
+                        );
                     }
-                    if (!this.remotePullInfoMap[entity]![id as string]) {
-                        const { getRemotePullInfo, pullEntities } = this.config.remotes.find(ele => ele.entity === entity)!;
-                        const pullEntityDict = {} as Record<string, PullEntityDef<ED, keyof ED, Cxt>;
-                        if (pullEntities) {
-                            pullEntities.forEach(
-                                (def) => pullEntityDict[def.entity as string] = def
-                            );
-                        }
-                        this.remotePullInfoMap[entity]![id as string] = {
-                            pullInfo: await getRemotePullInfo(id as string),
-                            pullEntityDict,
-                        };
-                    }
+                    this.remotePullInfoMap[entity]![id as string] = {
+                        pullInfo: await getRemotePullInfo(id as string),
+                        pullEntityDict,
+                    };
+                }
 
-                    const { pullInfo, pullEntityDict } = this.remotePullInfoMap[entity][id as string]!;
-                    const { userId, algorithm, publicKey } = pullInfo;
-                    // todo 解密
+                const { pullInfo, pullEntityDict } = this.remotePullInfoMap[entity][id as string]!;
+                const { userId, algorithm, publicKey } = pullInfo;
+                // todo 解密
 
-                    assert(userId);
-                    context.setCurrentUserId(userId);
-                    // 如果本次同步中有bornAt比本用户操作的最大的bornAt要小，则说明是重复更新，直接返回
+                assert(userId);
+                if (!this.pullMaxBornAtMap.hasOwnProperty(id as string)) {
                     const [maxHisOper] = await context.select('oper', {
                         data: {
                             id: 1,
@@ -417,56 +469,93 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                         indexFrom: 0,
                         count: 1,
                     }, { dontCollect: true });
+                    this.pullMaxBornAtMap[id as string] = maxHisOper?.bornAt as number || 0;
+                }
 
-                    const opers = body as ED['oper']['Schema'][];
-                    const legalOpers = maxHisOper ? opers.filter(
-                        ele => ele.bornAt > maxHisOper.bornAt!
-                    ) : opers;
+                let maxBornAt = this.pullMaxBornAtMap[id as string]!;
+                context.setCurrentUserId(userId);
+                const opers = body as ED['oper']['Schema'][];
 
-                    if (legalOpers.length > 0) {
-                        for (const oper of legalOpers) {
-                            const { id, targetEntity, action, data, bornAt, filter } = oper;
-                            const ids = getRelevantIds(filter!);
-                            assert(ids.length > 0);
+                const outdatedOpers = opers.filter(
+                    ele => ele.bornAt as number <= maxBornAt
+                );
+                const freshOpers = opers.filter(
+                    ele => ele.bornAt as number > maxBornAt
+                );
 
-                            this.checkOperationConsistent(targetEntity, ids, bornAt as number);
+                await Promise.all(
+                    [
+                        // 无法严格保证推送按bornAt，所以一旦还有outdatedOpers，检查其已经被apply
+                        (async () => {
+                            const ids = outdatedOpers.map(
+                                ele => ele.id
+                            );
+                            if (ids.length > 0) {
+                                const opersExisted = await context.select('oper', {
+                                    data: {
+                                        id: 1,
+                                    },
+                                    filter: {
+                                        id: {
+                                            $in: ids!,
+                                        }
+                                    }
+                                }, { dontCollect: true });
+                                if (opersExisted.length < ids.length) {
+                                    const missed = difference(ids, opersExisted.map(ele => ele.id));
+                                    // todo 这里如果远端业务逻辑严格，发生乱序应是无关的oper，直接执行就好 by Xc
+                                    throw new Error(`在sync过程中发现有丢失的oper数据「${missed}」`);
+                                }
+                                successIds.push(...ids);
+                            }
+                        })(),
+                        (async () => {
+                            for (const freshOper of freshOpers) {
+                                // freshOpers是按bornAt序产生的
+                                const { id, targetEntity, action, data, bornAt, filter } = freshOper;
+                                const ids = getRelevantIds(filter!);
+                                assert(ids.length > 0);
 
-                            if (pullEntityDict && pullEntityDict[targetEntity]) {
-                                const { process } = pullEntityDict[targetEntity];
-                                if (process) {
-                                    await process(action!, data, context);
+                                try {
+                                    if (pullEntityDict && pullEntityDict[targetEntity]) {
+                                        const { process } = pullEntityDict[targetEntity];
+                                        if (process) {
+                                            await process(action!, data, context);
+                                        }
+                                    }
+                                    const operation: ED[keyof ED]['Operation'] = {
+                                        id,
+                                        data,
+                                        action,
+                                        filter: {
+                                            id: ids.length === 1 ? ids[0] : {
+                                                $in: ids,
+                                            },
+                                        },
+                                        bornAt: bornAt as number,
+                                    };
+                                    await context.operate(targetEntity, operation, {});
+                                    successIds.push(id);
+                                    maxBornAt = bornAt as number;
+                                }
+                                catch (err: any) {
+                                    console.error('sync时出错', entity, JSON.stringify(freshOper));
+                                    failed = {
+                                        id,
+                                        error: err.toString(),
+                                    };
+                                    break;
                                 }
                             }
-                            const operation: ED[keyof ED]['Operation'] = {
-                                id,
-                                data,
-                                action,
-                                filter: {
-                                    id: ids.length === 1 ? ids[0] : {
-                                        $in: ids,
-                                    },
-                                },
-                                bornAt: bornAt as number,
-                            };
-                            await context.operate(targetEntity, operation, {});
-                        }
-                        // 因为legalOpers就是排好序的，所以直接返回最后一项的bornAt
-                        return {
-                            timestamp: legalOpers[legalOpers.length - 1].bornAt,
-                        };
-                    }
-                    else {
-                        assert(maxHisOper);
-                        return {
-                            timestamp: maxHisOper.bornAt,
-                        };
-                    }
-                }
-                catch (err) {
-                    return {
-                        error: JSON.stringify(err),
-                    };
-                }
+                        })()
+                    ]
+                );
+
+                this.pullMaxBornAtMap[id as string] = maxBornAt;
+                return {
+                    successIds,
+                    failed,
+                };
             }
         };
     }
