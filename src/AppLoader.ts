@@ -137,75 +137,14 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
 
     constructor(path: string, contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>, ns?: Namespace, nsServer?: Namespace) {
         super(path);
-        const { dbConfig, syncConfig } = this.getConfiguration();
+        const { dbConfig } = this.getConfiguration();
         const { storageSchema } = require(`${path}/lib/oak-app-domain/Storage`);
         const { authDeduceRelationMap, selectFreeEntities, updateFreeDict } = require(`${path}/lib/config/relation`)
         this.externalDependencies = require(OAK_EXTERNAL_LIBS_FILEPATH(join(path, 'lib')));
         this.aspectDict = Object.assign({}, generalAspectDict, this.requireSth('lib/aspects/index'));
         this.dbStore = new DbStore<ED, Cxt>(storageSchema, (cxtStr) => this.makeContext(cxtStr), dbConfig, authDeduceRelationMap, selectFreeEntities, updateFreeDict);
         if (ns) {
-            this.dataSubscriber = new DataSubscriber(ns, (scene) => this.contextBuilder(scene)(this.dbStore), nsServer);            
-        }
-        if (syncConfig) {
-            const {
-                self, remotes                
-            } = syncConfig;
-
-            const { getSelfEncryptInfo, ...restSelf } = self;
-            
-            this.synchronizer = new Synchronizer({
-                self: {
-                    // entity: self.entity,
-                    getSelfEncryptInfo:  async() => {
-                        const context = await contextBuilder()(this.dbStore);
-                        await context.begin();
-                        try {
-                            const result = await self.getSelfEncryptInfo(context);
-                            await context.commit();
-                            return result;
-                        }
-                        catch (err) {
-                            await context.rollback();
-                            throw err;
-                        }
-                    },
-                    ...restSelf
-                },
-                remotes: remotes.map(
-                    (r) => {
-                        const { getPushInfo, getPullInfo, ...rest } = r;
-                        return {
-                            getRemotePushInfo: async (id) => {
-                                const context = await contextBuilder()(this.dbStore);
-                                await context.begin();
-                                try {
-                                    const result = await getPushInfo(id, context);
-                                    await context.commit();
-                                    return result;
-                                }
-                                catch (err) {
-                                    await context.rollback();
-                                    throw err;
-                                }
-                            },
-                            getRemotePullInfo: async (userId) => {
-                                const context = await contextBuilder()(this.dbStore);
-                                await context.begin();
-                                try {
-                                    const result = await getPullInfo(userId, context);
-                                    await context.commit();
-                                    return result;
-                                }
-                                catch (err) {
-                                    await context.rollback();
-                                    throw err;
-                                }
-                            },
-                            ...rest,
-                        };
-                    }
-                )
-            }, this.dbStore.getSchema());
+            this.dataSubscriber = new DataSubscriber(ns, (scene) => this.contextBuilder(scene)(this.dbStore), nsServer);
         }
 
         this.contextBuilder = (scene) => async (store) => {
@@ -221,7 +160,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
                     Object.keys(eventOperationMap).forEach(
                         (event) => {
                             const ids = eventOperationMap[event];
-    
+
                             const opRecordsToPublish = (opRecords as CreateOpResult<ED, keyof ED>[]).filter(
                                 (ele) => !!ele.id && ids.includes(ele.id)
                             );
@@ -276,6 +215,69 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         const { path } = this;
         if (!initialize) {
             this.initTriggers();
+            const { dbConfig, syncConfig } = this.getConfiguration();
+
+            if (syncConfig) {
+                const {
+                    self, remotes
+                } = syncConfig;
+
+                const { getSelfEncryptInfo, ...restSelf } = self;
+
+                this.synchronizer = new Synchronizer({
+                    self: {
+                        // entity: self.entity,
+                        getSelfEncryptInfo: async () => {
+                            const context = await this.contextBuilder()(this.dbStore);
+                            await context.begin();
+                            try {
+                                const result = await self.getSelfEncryptInfo(context);
+                                await context.commit();
+                                return result;
+                            }
+                            catch (err) {
+                                await context.rollback();
+                                throw err;
+                            }
+                        },
+                        ...restSelf
+                    },
+                    remotes: remotes.map(
+                        (r) => {
+                            const { getPushInfo, getPullInfo, ...rest } = r;
+                            return {
+                                getRemotePushInfo: async (id) => {
+                                    const context = await this.contextBuilder()(this.dbStore);
+                                    await context.begin();
+                                    try {
+                                        const result = await getPushInfo(id, context);
+                                        await context.commit();
+                                        return result;
+                                    }
+                                    catch (err) {
+                                        await context.rollback();
+                                        throw err;
+                                    }
+                                },
+                                getRemotePullInfo: async (userId) => {
+                                    const context = await this.contextBuilder()(this.dbStore);
+                                    await context.begin();
+                                    try {
+                                        const result = await getPullInfo(userId, context);
+                                        await context.commit();
+                                        return result;
+                                    }
+                                    catch (err) {
+                                        await context.rollback();
+                                        throw err;
+                                    }
+                                },
+                                ...rest,
+                            };
+                        }
+                    )
+                }, this.dbStore.getSchema());
+            }
         }
         const { importations, exportations } = require(`${path}/lib/ports/index`);
         registerPorts(importations || [], exportations || []);
@@ -450,7 +452,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
                 }, context);
 
                 if (rows.length > 0) {
-                    result = await fn(context, rows);                
+                    result = await fn(context, rows);
                 }
             }
             await context.commit();
@@ -480,7 +482,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             }
         };
         const doWatchers = async () => {
-            count ++;
+            count++;
             const start = Date.now();
             for (const w of totalWatchers) {
                 execOne(w, start);
