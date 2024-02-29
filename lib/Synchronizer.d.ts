@@ -25,7 +25,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
      * 其实这里还无法严格保证先产生的oper一定先到达被推送，因为volatile trigger是在事务提交后再发生的，但这种情况在目前应该跑不出来，在实际执行oper的时候assert掉先。by Xc 20240226
      */
     private pushOper;
-    private loadPublicKey;
+    private getSelfEncryptInfo;
     private makeCreateOperTrigger;
     constructor(config: SyncConfigWrapper<ED, Cxt>, schema: StorageSchema<ED>);
     /**

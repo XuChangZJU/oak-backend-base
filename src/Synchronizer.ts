@@ -47,7 +47,6 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
         let nextPushTimestamp2 = typeof retry === 'number' ? Math.pow(2, Math.min(retry, 10)) : 1;
         channel.nextPushTimestamp = nextPushTimestamp2 * 1000 + Date.now();
 
-        assert(this.selfEncryptInfo);
         const opers = queue.map(ele => ele.oper);
 
         let restOpers = [] as typeof queue;
@@ -60,12 +59,13 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
         };
         try {
             // todo 加密
+            const selfEncryptInfo = await this.getSelfEncryptInfo();
             console.log('向远端结点sync数据', api, JSON.stringify(opers));
             const res = await fetch(api, {
                 method: 'post',
                 headers: {
                     'Content-Type': 'application/json',
-                    [OAK_SYNC_HEADER_ITEM]: this.selfEncryptInfo!.id,
+                    [OAK_SYNC_HEADER_ITEM]: selfEncryptInfo!.id,
                 },
                 body: JSON.stringify(opers),
             });
@@ -168,7 +168,6 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
             if (!channel.handler) {
                 channel.nextPushTimestamp = nextPushTimestamp2;
                 channel.handler = setTimeout(async () => {
-                    assert(this.selfEncryptInfo);
                     await this.pushOnChannel(channel);
                 }, nextPushTimestamp2 - now);
             }
@@ -185,8 +184,12 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
         }
     }
 
-    private async loadPublicKey() {
+    private async getSelfEncryptInfo() {
+        if (this.selfEncryptInfo) {
+            return this.selfEncryptInfo;
+        }
         this.selfEncryptInfo = await this.config.self.getSelfEncryptInfo();
+        return this.selfEncryptInfo!;
     }
 
     private makeCreateOperTrigger() {
@@ -389,7 +392,6 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
     constructor(config: SyncConfigWrapper<ED, Cxt>, schema: StorageSchema<ED>) {
         this.config = config;
         this.schema = schema;
-        this.loadPublicKey();
     }
 
     /**

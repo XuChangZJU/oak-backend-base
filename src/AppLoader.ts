@@ -214,7 +214,6 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
     async mount(initialize?: true) {
         const { path } = this;
         if (!initialize) {
-            this.initTriggers();
             const { dbConfig, syncConfig } = this.getConfiguration();
 
             if (syncConfig) {
@@ -278,6 +277,8 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
                     )
                 }, this.dbStore.getSchema());
             }
+
+            this.initTriggers();
         }
         const { importations, exportations } = require(`${path}/lib/ports/index`);
         registerPorts(importations || [], exportations || []);
