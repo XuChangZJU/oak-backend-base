@@ -6,7 +6,7 @@ import { makeIntrinsicCTWs } from "oak-domain/lib/store/actionDef";
 import { intersection, omit } from 'oak-domain/lib/utils/lodash';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { generateNewIdAsync } from 'oak-domain/lib/utils/uuid';
-import { AppLoader as GeneralAppLoader, Trigger, Checker, Aspect, CreateOpResult, Context, EntityDict, Watcher, BBWatcher, WBWatcher, OpRecord, Routine, FreeRoutine, Timer, FreeTimer, StorageSchema, OperationResult } from "oak-domain/lib/types";
+import { AppLoader as GeneralAppLoader, Trigger, Checker, Aspect, CreateOpResult, SyncConfig, EntityDict, Watcher, BBWatcher, WBWatcher, OpRecord, Routine, FreeRoutine, Timer, FreeTimer, StorageSchema, OperationResult } from "oak-domain/lib/types";
 import { DbStore } from "./DbStore";
 import generalAspectDict, { clearPorts, registerPorts } from 'oak-common-aspect/lib/index';
 import { MySQLConfiguration } from 'oak-db/lib/MySQL/types/Configuration';
@@ -19,7 +19,6 @@ import { Server as SocketIoServer, Namespace } from 'socket.io';
 import DataSubscriber from './cluster/DataSubscriber';
 import { getClusterInfo } from './cluster/env';
 import Synchronizer from './Synchronizer';
-import { SyncConfig } from './types/Sync';
 
 
 export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends BackendRuntimeContext<ED>> extends GeneralAppLoader<ED, Cxt> {
@@ -27,7 +26,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
     private aspectDict: Record<string, Aspect<ED, Cxt>>;
     private externalDependencies: string[];
     protected dataSubscriber?: DataSubscriber<ED, Cxt>;
-    protected synchronizer?: Synchronizer<ED, Cxt>;
+    protected synchronizers?: Synchronizer<ED, Cxt>[];
     protected contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>;
 
     private requireSth(filePath: string): any {
@@ -127,11 +126,11 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
         const dbConfigFile = join(this.path, 'configuration', 'mysql.json');
         const dbConfig = require(dbConfigFile);
         const syncConfigFile = join(this.path, 'lib', 'configuration', 'sync.js');
-        const syncConfig = existsSync(syncConfigFile) && require(syncConfigFile).default;
+        const syncConfigs = existsSync(syncConfigFile) && require(syncConfigFile).default;
 
         return {
             dbConfig: dbConfig as MySQLConfiguration,
-            syncConfig: syncConfig as SyncConfig<ED, Cxt> | undefined,
+            syncConfigs: syncConfigs as SyncConfig<ED, Cxt>[] | undefined,
         };
     }
 
@@ -202,80 +201,26 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             (checker) => this.dbStore.registerChecker(checker)
         );
 
-        if (this.synchronizer) {
+        if (this.synchronizers) {
             // 同步数据到远端结点通过commit trigger来完成
-            const syncTriggers = this.synchronizer.getSyncTriggers();
-            syncTriggers.forEach(
-                (trigger) => this.registerTrigger(trigger)
-            );
+            for (const synchronizer of this.synchronizers) {
+                const syncTriggers = synchronizer.getSyncTriggers();
+                syncTriggers.forEach(
+                    (trigger) => this.registerTrigger(trigger)
+                );
+            }
         }
     }
 
     async mount(initialize?: true) {
         const { path } = this;
         if (!initialize) {
-            const { dbConfig, syncConfig } = this.getConfiguration();
+            const { syncConfigs } = this.getConfiguration();
 
-            if (syncConfig) {
-                const {
-                    self, remotes
-                } = syncConfig;
-
-                const { getSelfEncryptInfo, ...restSelf } = self;
-
-                this.synchronizer = new Synchronizer({
-                    self: {
-                        // entity: self.entity,
-                        getSelfEncryptInfo: async () => {
-                            const context = await this.contextBuilder()(this.dbStore);
-                            await context.begin();
-                            try {
-                                const result = await self.getSelfEncryptInfo(context);
-                                await context.commit();
-                                return result;
-                            }
-                            catch (err) {
-                                await context.rollback();
-                                throw err;
-                            }
-                        },
-                        ...restSelf
-                    },
-                    remotes: remotes.map(
-                        (r) => {
-                            const { getPushInfo, getPullInfo, ...rest } = r;
-                            return {
-                                getRemotePushInfo: async (id) => {
-                                    const context = await this.contextBuilder()(this.dbStore);
-                                    await context.begin();
-                                    try {
-                                        const result = await getPushInfo(id, context);
-                                        await context.commit();
-                                        return result;
-                                    }
-                                    catch (err) {
-                                        await context.rollback();
-                                        throw err;
-                                    }
-                                },
-                                getRemotePullInfo: async (userId) => {
-                                    const context = await this.contextBuilder()(this.dbStore);
-                                    await context.begin();
-                                    try {
-                                        const result = await getPullInfo(userId, context);
-                                        await context.commit();
-                                        return result;
-                                    }
-                                    catch (err) {
-                                        await context.rollback();
-                                        throw err;
-                                    }
-                                },
-                                ...rest,
-                            };
-                        }
-                    )
-                }, this.dbStore.getSchema());
+            if (syncConfigs) {
+                this.synchronizers = syncConfigs.map(
+                    config => new Synchronizer(config, this.dbStore.getSchema())
+                );
             }
 
             this.initTriggers();
@@ -407,9 +352,13 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             }
         }
 
-        if (this.synchronizer) {
-            const syncEp = this.synchronizer.getSelfEndpoint();
-            transformEndpointItem(syncEp.name, syncEp);
+        if (this.synchronizers) {
+            this.synchronizers.forEach(
+                (synchronizer) => {
+                    const syncEp = synchronizer.getSelfEndpoint();
+                    transformEndpointItem(syncEp.name, syncEp);
+                }
+            );
         }
         return endPointRouters;
     }

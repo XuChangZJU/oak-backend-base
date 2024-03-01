@@ -1,4 +1,5 @@
-import { EntityDict, StorageSchema, EndpointItem, RemotePullInfo, SelfEncryptInfo, RemotePushInfo, PushEntityDef, PullEntityDef } from 'oak-domain/lib/types';
+import { EntityDict, StorageSchema, EndpointItem, RemotePullInfo, SelfEncryptInfo, 
+    RemotePushInfo, PushEntityDef, PullEntityDef, SyncConfig } from 'oak-domain/lib/types';
 import { VolatileTrigger } from 'oak-domain/lib/types/Trigger';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { destructRelationPath, destructDirectPath } from 'oak-domain/lib/utils/relationPath';
@@ -6,10 +7,10 @@ import { BackendRuntimeContext } from 'oak-frontend-base/lib/context/BackendRunt
 import assert from 'assert';
 import { join } from 'path';
 import { difference } from 'oak-domain/lib/utils/lodash';
-import { SyncConfigWrapper } from './types/Sync';
 import { getRelevantIds } from 'oak-domain/lib/store/filter';
 
-const OAK_SYNC_HEADER_ITEM = 'oak-sync-remote-id';
+const OAK_SYNC_HEADER_ENTITY = 'oak-sync-entity';
+const OAK_SYNC_HEADER_ENTITYID = 'oak-sync-entity-id';
 
 type Channel<ED extends EntityDict & BaseEntityDict> = {
     queue: Array<{
@@ -23,7 +24,7 @@ type Channel<ED extends EntityDict & BaseEntityDict> = {
 };
 
 export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt extends BackendRuntimeContext<ED>> {
-    private config: SyncConfigWrapper<ED, Cxt>;
+    private config: SyncConfig<ED, Cxt>;
     private schema: StorageSchema<ED>;
     private selfEncryptInfo?: SelfEncryptInfo;
     private remotePullInfoMap: Record<string, Record<string, {
@@ -39,7 +40,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
      * @param channel 
      * @param retry 
      */
-    private async pushOnChannel(channel: Channel<ED>, retry?: number) {
+    private async pushOnChannel(remoteEntity: keyof ED, remoteEntityId: string, context: Cxt, channel: Channel<ED>, retry?: number) {
         const { queue, api, nextPushTimestamp } = channel;
         assert(nextPushTimestamp);
 
@@ -59,19 +60,21 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
         };
         try {
             // todo 加密
-            const selfEncryptInfo = await this.getSelfEncryptInfo();
+            const selfEncryptInfo = await this.getSelfEncryptInfo(context);
             console.log('向远端结点sync数据', api, JSON.stringify(opers));
-            const res = await fetch(api, {
+            const finalApi = join(api, selfEncryptInfo.id);
+            const res = await fetch(finalApi, {
                 method: 'post',
                 headers: {
                     'Content-Type': 'application/json',
-                    [OAK_SYNC_HEADER_ITEM]: selfEncryptInfo!.id,
+                    [OAK_SYNC_HEADER_ENTITY]: remoteEntity as string,
+                    [OAK_SYNC_HEADER_ENTITYID]: remoteEntityId,
                 },
                 body: JSON.stringify(opers),
             });
 
             if (res.status !== 200) {
-                throw new Error(`sync数据时，访问api「${api}」的结果不是200。「${res.status}」`);
+                throw new Error(`sync数据时，访问api「${finalApi}」的结果不是200。「${res.status}」`);
             }
             json = await res.json();
         }
@@ -107,7 +110,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
             const interval = Math.max(0, channel.nextPushTimestamp - Date.now());
             const retry2 = needRetry ? (typeof retry === 'number' ? retry + 1 : 1) : undefined;
             console.log('need retry', retry2);
-            setTimeout(() => this.pushOnChannel(channel, retry2), interval);
+            setTimeout(() => this.pushOnChannel(remoteEntity, remoteEntityId, context, channel, retry2), interval);
         }
         else {
             channel.handler = undefined;
@@ -125,10 +128,13 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
      * 其实这里还无法严格保证先产生的oper一定先到达被推送，因为volatile trigger是在事务提交后再发生的，但这种情况在目前应该跑不出来，在实际执行oper的时候assert掉先。by Xc 20240226
      */
     private async pushOper(
+        context: Cxt,
         oper: Partial<ED['oper']['Schema']>,
         userId: string,
         url: string,
         endpoint: string,
+        remoteEntity: keyof ED,
+        remoteEntityId: string,
         nextPushTimestamp?: number
     ) {
         if (!this.remotePushChannel[userId]) {
@@ -168,7 +174,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
             if (!channel.handler) {
                 channel.nextPushTimestamp = nextPushTimestamp2;
                 channel.handler = setTimeout(async () => {
-                    await this.pushOnChannel(channel);
+                    await this.pushOnChannel(remoteEntity, remoteEntityId, context, channel);
                 }, nextPushTimestamp2 - now);
             }
             else if (channel.nextPushTimestamp && channel.nextPushTimestamp > nextPushTimestamp2) {
@@ -184,11 +190,11 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
         }
     }
 
-    private async getSelfEncryptInfo() {
+    private async getSelfEncryptInfo(context: Cxt) {
         if (this.selfEncryptInfo) {
             return this.selfEncryptInfo;
         }
-        this.selfEncryptInfo = await this.config.self.getSelfEncryptInfo();
+        this.selfEncryptInfo = await this.config.self.getSelfEncryptInfo(context);
         return this.selfEncryptInfo!;
     }
 
@@ -198,20 +204,24 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
 
         // 根据remotes定义，建立从entity到需要同步的远端结点信息的Map
         const pushAccessMap: Record<string, Array<{
-            projection: ED[keyof ED]['Selection']['data'];                                             // 从entity上取到相关user需要的projection
-            groupByUsers: (row: Partial<ED[keyof ED]['Schema']>[]) => Record<string, string[]>;        // 根据相关数据行关联的userId，对行ID进行分组
-            getRemotePushInfo: (userId: string) => Promise<RemotePushInfo>;                            // 根据userId获得相应push远端的信息
-            endpoint: string;                                                                          // 远端接收endpoint的url
+            projection: ED[keyof ED]['Selection']['data'];                                                       // 从entity上取到相关user需要的projection
+            groupByUsers: (row: Partial<ED[keyof ED]['Schema']>[]) => Record<string, {
+                entity: keyof ED;       // 对方目标对象
+                entityId: string;       // 对象目标对象Id
+                rowIds: string[];       // 要推送的rowId
+            }>;        // 根据相关数据行关联的userId，对行ID进行重分组，键值为userId
+            getRemotePushInfo: SyncConfig<ED, Cxt>['remotes'][number]['getPushInfo'];                            // 根据userId获得相应push远端的信息
+            endpoint: string;                                                                                    // 远端接收endpoint的url
             actions?: string[];
             onSynchronized: PushEntityDef<ED, keyof ED, Cxt>['onSynchronized'];
             entity: keyof ED;
         }>> = {};
         remotes.forEach(
             (remote) => {
-                const { getRemotePushInfo, pushEntities: pushEntityDefs, endpoint, pathToUser, relationName: rnRemote, entitySelf } = remote;
+                const { getPushInfo, pushEntities: pushEntityDefs, endpoint, pathToUser, relationName: rnRemote } = remote;
                 if (pushEntityDefs) {
                     const pushEntities = [] as Array<keyof ED>;
-                    const endpoint2 = join(endpoint || 'sync', entitySelf as string || self.entitySelf as string);
+                    const endpoint2 = join(endpoint || 'sync', self.entity as string);
                     for (const def of pushEntityDefs) {
                         const { path, relationName, recursive, entity, actions, onSynchronized } = def;
                         pushEntities.push(entity);
@@ -228,19 +238,30 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                         }, recursive) : destructDirectPath(this.schema, entity, path2, recursive);
 
                         const groupByUsers = (rows: Partial<ED[keyof ED]['Schema']>[]) => {
-                            const userRowDict: Record<string, string[]> = {};
-                            rows.filter(
+                            const userRowDict: Record<string, {
+                                rowIds: string[];
+                                entityId: string;
+                                entity: keyof ED;
+                            }> = {};
+                            rows.forEach(
                                 (row) => {
-                                    const userIds = getData(row)?.map(ele => ele.userId);
-                                    if (userIds) {
-                                        userIds.forEach(
-                                            (userId) => {
+                                    const goals = getData(row);
+                                    if (goals) {
+                                        goals.forEach(
+                                            ({ entity, entityId, userId }) => {
                                                 if (userRowDict[userId]) {
-                                                    userRowDict[userId].push(row.id!);
+                                                    // 逻辑上来说同一个userId，其关联的entity和entityId必然相同，这个entity/entityId代表了对方
+                                                    assert(userRowDict[userId].entity === entity && userRowDict[userId].entityId === entityId);
+                                                    userRowDict[userId].rowIds.push(row.id!);
                                                 }
                                                 else {
-                                                    userRowDict[userId] = [row.id!];
+                                                    userRowDict[userId] = {
+                                                        entity,
+                                                        entityId,
+                                                        rowIds: [row.id!],
+                                                    };
                                                 }
+
                                             }
                                         )
                                     }
@@ -253,7 +274,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                             pushAccessMap[entity as string] = [{
                                 projection,
                                 groupByUsers,
-                                getRemotePushInfo,
+                                getRemotePushInfo: getPushInfo,
                                 endpoint: endpoint2,
                                 entity,
                                 actions,
@@ -264,7 +285,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                             pushAccessMap[entity as string].push({
                                 projection,
                                 groupByUsers,
-                                getRemotePushInfo,
+                                getRemotePushInfo: getPushInfo,
                                 endpoint: endpoint2,
                                 entity,
                                 actions,
@@ -324,7 +345,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                     await Promise.all(
                         pushEntityNodes.map(
                             async (node) => {
-                                const { projection, groupByUsers, getRemotePushInfo: getRemoteAccessInfo, endpoint, entity, actions, onSynchronized } = node;
+                                const { projection, groupByUsers, getRemotePushInfo: getRemoteAccessInfo, endpoint, actions, onSynchronized } = node;
                                 if (!actions || actions.includes(action!)) {
                                     const pushed = [] as Promise<void>[];
                                     const rows = await context.select(targetEntity!, {
@@ -342,7 +363,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                                     // userId就是需要发送给远端的user，但是要将本次操作的user过滤掉（操作的原本产生者）
                                     const userSendDict = groupByUsers(rows);
                                     const pushToUserIdFn = async (userId: string) => {
-                                        const rowIds = userSendDict[userId];
+                                        const { entity, entityId, rowIds } = userSendDict[userId];
                                         // 推送到远端结点的oper
                                         const oper2 = {
                                             id: oper.id!,
@@ -356,8 +377,11 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                                             bornAt: oper.bornAt!,
                                             targetEntity,
                                         };
-                                        const { url } = await getRemoteAccessInfo(userId);
-                                        await this.pushOper(oper2 as any /** 这里不明白为什么TS过不去 */, userId, url, endpoint);
+                                        const { url } = await getRemoteAccessInfo(context, {
+                                            userId,
+                                            remoteEntityId: entityId,
+                                        });
+                                        await this.pushOper(context, oper2 as any /** 这里不明白为什么TS过不去 */, userId, url, endpoint, entity, entityId);
                                     };
                                     for (const userId in userSendDict) {
                                         if (userId !== operatorId) {
@@ -389,7 +413,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
         return createOperTrigger;
     }
 
-    constructor(config: SyncConfigWrapper<ED, Cxt>, schema: StorageSchema<ED>) {
+    constructor(config: SyncConfig<ED, Cxt>, schema: StorageSchema<ED>) {
         this.config = config;
         this.schema = schema;
     }
@@ -402,15 +426,11 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
         return [this.makeCreateOperTrigger()] as Array<VolatileTrigger<ED, keyof ED, Cxt>>;
     }
 
-    private async checkOperationConsistent(entity: keyof ED, ids: string[], bornAt: number) {
-
-    }
-
     getSelfEndpoint(): EndpointItem<ED, Cxt> {
         return {
             name: this.config.self.endpoint || 'sync',
             method: 'post',
-            params: ['entity'],
+            params: ['entity', 'entityId'],
             fn: async (context, params, headers, req, body): Promise<{
                 successIds: string[],
                 failed?: {
@@ -419,8 +439,8 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                 };
             }> => {
                 // body中是传过来的oper数组信息
-                const { entity } = params;
-                const { [OAK_SYNC_HEADER_ITEM]: id } = headers;
+                const { entity, entityId } = params;
+                const { [OAK_SYNC_HEADER_ENTITY]: meEntity, [OAK_SYNC_HEADER_ENTITYID]: meEntityId } = headers;
 
                 console.log('接收到来自远端的sync数据', entity, JSON.stringify(body));
                 const successIds = [] as string[];
@@ -432,26 +452,35 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                 if (!this.remotePullInfoMap[entity]) {
                     this.remotePullInfoMap[entity] = {};
                 }
-                if (!this.remotePullInfoMap[entity]![id as string]) {
-                    const { getRemotePullInfo, pullEntities } = this.config.remotes.find(ele => ele.entity === entity)!;
+                if (!this.remotePullInfoMap[entity]![entityId]) {
+                    const { getPullInfo, pullEntities } = this.config.remotes.find(ele => ele.entity === entity)!;
                     const pullEntityDict = {} as Record<string, PullEntityDef<ED, keyof ED, Cxt>>;
                     if (pullEntities) {
                         pullEntities.forEach(
                             (def) => pullEntityDict[def.entity as string] = def
                         );
                     }
-                    this.remotePullInfoMap[entity]![id as string] = {
-                        pullInfo: await getRemotePullInfo(id as string),
+                    this.remotePullInfoMap[entity]![entityId] = {
+                        pullInfo: await getPullInfo(context, {
+                            selfId: meEntityId as string,
+                            remoteEntityId: entityId,
+                        }),
                         pullEntityDict,
                     };
                 }
 
-                const { pullInfo, pullEntityDict } = this.remotePullInfoMap[entity][id as string]!;
-                const { userId, algorithm, publicKey } = pullInfo;
+                const { pullInfo, pullEntityDict } = this.remotePullInfoMap[entity][entityId]!;
+                const { userId, algorithm, publicKey, cxtInfo } = pullInfo;
+                assert(userId);
+                context.setCurrentUserId(userId);
+                if (cxtInfo) {
+                    await context.initialize(cxtInfo);
+                }
+                const selfEncryptInfo = await this.getSelfEncryptInfo(context);
+                assert(selfEncryptInfo.id === meEntityId && meEntity === this.config.self.entity);
                 // todo 解密
 
-                assert(userId);
-                if (!this.pullMaxBornAtMap.hasOwnProperty(id as string)) {
+                if (!this.pullMaxBornAtMap.hasOwnProperty(entityId)) {
                     const [maxHisOper] = await context.select('oper', {
                         data: {
                             id: 1,
@@ -471,11 +500,10 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                         indexFrom: 0,
                         count: 1,
                     }, { dontCollect: true });
-                    this.pullMaxBornAtMap[id as string] = maxHisOper?.bornAt as number || 0;
+                    this.pullMaxBornAtMap[entityId] = maxHisOper?.bornAt as number || 0;
                 }
 
-                let maxBornAt = this.pullMaxBornAtMap[id as string]!;
-                context.setCurrentUserId(userId);
+                let maxBornAt = this.pullMaxBornAtMap[entityId]!;
                 const opers = body as ED['oper']['Schema'][];
 
                 const outdatedOpers = opers.filter(
@@ -553,7 +581,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                     ]
                 );
 
-                this.pullMaxBornAtMap[id as string] = maxBornAt;
+                this.pullMaxBornAtMap[entityId] = maxBornAt;
                 return {
                     successIds,
                     failed,
