@@ -520,6 +520,16 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
                 }
             }
         }
+
+        if (this.synchronizers) {
+            this.synchronizers.forEach(
+                (synchronizer) => {
+                    // 这个routine在内部处理异步
+                    const routine = synchronizer.getSyncRoutine();
+                    this.execWatcher(routine);
+                }
+            );
+        }
     }
 
     async execRoutine(routine: (context: Cxt) => Promise<void>) {

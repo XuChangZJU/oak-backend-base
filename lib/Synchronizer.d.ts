@@ -1,20 +1,21 @@
-import { EntityDict, StorageSchema, EndpointItem, SyncConfig } from 'oak-domain/lib/types';
+import { EntityDict, StorageSchema, EndpointItem, SyncConfig, Watcher } from 'oak-domain/lib/types';
 import { VolatileTrigger } from 'oak-domain/lib/types/Trigger';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { BackendRuntimeContext } from 'oak-frontend-base/lib/context/BackendRuntimeContext';
 export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt extends BackendRuntimeContext<ED>> {
     private config;
     private schema;
-    private selfEncryptInfo?;
     private remotePullInfoMap;
     private pullMaxBornAtMap;
     private remotePushChannel;
+    private pushAccessMap;
     /**
      * 向某一个远端对象push opers。根据幂等性，这里如果失败了必须反复推送
      * @param channel
      * @param retry
      */
-    private pushOnChannel;
+    private startChannel;
+    private joinChannel;
     /**
      * 推向远端Node的oper，需要严格保证按产生的时间序推送。根据幂等原理，这里必须要推送成功
      * 因此在这里要实现两点：
@@ -24,7 +25,15 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
      * 其实这里还无法严格保证先产生的oper一定先到达被推送，因为volatile trigger是在事务提交后再发生的，但这种情况在目前应该跑不出来，在实际执行oper的时候assert掉先。by Xc 20240226
      */
     private pushOper;
-    private getSelfEncryptInfo;
+    /**
+     * 因为应用可能是多租户，得提前确定context下的selfEncryptInfo
+     * 由于checkpoint时无法区别不同上下文之间的未完成oper数据，所以接口只能这样设计
+     * @param id
+     * @param context
+     * @param selfEncryptInfo
+     * @returns
+     */
+    private synchronizeOpersToRemote;
     private makeCreateOperTrigger;
     constructor(config: SyncConfig<ED, Cxt>, schema: StorageSchema<ED>);
     /**
@@ -32,5 +41,6 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
      * @returns
      */
     getSyncTriggers(): VolatileTrigger<ED, keyof ED, Cxt>[];
+    getSyncRoutine(): Watcher<ED, keyof ED, Cxt>;
     getSelfEndpoint(): EndpointItem<ED, Cxt>;
 }

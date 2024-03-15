@@ -1,5 +1,7 @@
-import { EntityDict, StorageSchema, EndpointItem, RemotePullInfo, SelfEncryptInfo, 
-    RemotePushInfo, PushEntityDef, PullEntityDef, SyncConfig } from 'oak-domain/lib/types';
+import {
+    EntityDict, StorageSchema, EndpointItem, RemotePullInfo, SelfEncryptInfo,
+    RemotePushInfo, PushEntityDef, PullEntityDef, SyncConfig, TriggerDataAttribute, TriggerUuidAttribute, OakException, Routine, Watcher
+} from 'oak-domain/lib/types';
 import { VolatileTrigger } from 'oak-domain/lib/types/Trigger';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { destructRelationPath, destructDirectPath } from 'oak-domain/lib/utils/relationPath';
@@ -8,49 +10,65 @@ import assert from 'assert';
 import { join } from 'path';
 import { difference } from 'oak-domain/lib/utils/lodash';
 import { getRelevantIds } from 'oak-domain/lib/store/filter';
+import { generateNewIdAsync } from 'oak-domain/lib/utils/uuid';
 
 const OAK_SYNC_HEADER_ENTITY = 'oak-sync-entity';
 const OAK_SYNC_HEADER_ENTITYID = 'oak-sync-entity-id';
 
+// 一个channel是代表要推送的一个目标对象
 type Channel<ED extends EntityDict & BaseEntityDict> = {
     queue: Array<{
-        resolve: () => void;
-        reject: (err: any) => void;
+        resolve: (value: unknown) => void;
         oper: Partial<ED['oper']['Schema']>;
     }>;            // 要推送的oper队列
     api: string;                                            // 推送的api
-    nextPushTimestamp?: number;                             // 下一次推送的时间戳
+    nextPushTimestamp: number;                             // 下一次推送的时间戳
     handler?: ReturnType<typeof setTimeout>;                // 推送定时器
+    entity: keyof ED;
+    entityId: string;
+    running: boolean;
+    selfEncryptInfo: SelfEncryptInfo;
 };
 
 export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt extends BackendRuntimeContext<ED>> {
     private config: SyncConfig<ED, Cxt>;
     private schema: StorageSchema<ED>;
-    private selfEncryptInfo?: SelfEncryptInfo;
     private remotePullInfoMap: Record<string, Record<string, {
         pullInfo: RemotePullInfo,
         pullEntityDict: Record<string, PullEntityDef<ED, keyof ED, Cxt>>;
     }>> = {};
     private pullMaxBornAtMap: Record<string, number> = {};
-
     private remotePushChannel: Record<string, Channel<ED>> = {};
+
+    private pushAccessMap: Record<string, Array<{
+        projection: ED[keyof ED]['Selection']['data'];                                                       // 从entity上取到相关user需要的projection
+        groupByUsers: (row: Partial<ED[keyof ED]['Schema']>[]) => Record<string, {
+            entity: keyof ED;       // 对方目标对象
+            entityId: string;       // 对象目标对象Id
+            rowIds: string[];       // 要推送的rowId
+        }>;        // 根据相关数据行关联的userId，对行ID进行重分组，键值为userId
+        getRemotePushInfo: SyncConfig<ED, Cxt>['remotes'][number]['getPushInfo'];                            // 根据userId获得相应push远端的信息
+        endpoint: string;                                                                                    // 远端接收endpoint的url
+        actions?: string[];
+        onSynchronized: PushEntityDef<ED, keyof ED, Cxt>['onSynchronized'];
+        entity: keyof ED;
+    }>> = {};
 
     /**
      * 向某一个远端对象push opers。根据幂等性，这里如果失败了必须反复推送
      * @param channel 
      * @param retry 
      */
-    private async pushOnChannel(remoteEntity: keyof ED, remoteEntityId: string, context: Cxt, channel: Channel<ED>, retry?: number) {
-        const { queue, api, nextPushTimestamp } = channel;
-        assert(nextPushTimestamp);
+    private async startChannel(channel: Channel<ED>, retry: number) {
+        const { queue, api, selfEncryptInfo, entity, entityId } = channel;
 
-        // 失败重试的间隔，失败次数多了应当适当延长，最多延长到1024秒
-        let nextPushTimestamp2 = typeof retry === 'number' ? Math.pow(2, Math.min(retry, 10)) : 1;
-        channel.nextPushTimestamp = nextPushTimestamp2 * 1000 + Date.now();
+        channel.queue = [];
+        channel.running = true;
+        channel.nextPushTimestamp = Number.MAX_SAFE_INTEGER;
 
         const opers = queue.map(ele => ele.oper);
 
-        let restOpers = [] as typeof queue;
+        let failedOpers = [] as typeof queue;
         let needRetry = false;
         let json: {
             successIds: string[], failed: {
@@ -60,15 +78,15 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
         };
         try {
             // todo 加密
-            const selfEncryptInfo = await this.getSelfEncryptInfo(context);
+
             console.log('向远端结点sync数据', api, JSON.stringify(opers));
             const finalApi = join(api, selfEncryptInfo.id);
             const res = await fetch(finalApi, {
                 method: 'post',
                 headers: {
                     'Content-Type': 'application/json',
-                    [OAK_SYNC_HEADER_ENTITY]: remoteEntity as string,
-                    [OAK_SYNC_HEADER_ENTITYID]: remoteEntityId,
+                    [OAK_SYNC_HEADER_ENTITY]: entity as string,
+                    [OAK_SYNC_HEADER_ENTITYID]: entityId,
                 },
                 body: JSON.stringify(opers),
             });
@@ -81,7 +99,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
         catch (err: any) {
             console.error('sync push时出现error', err);
             needRetry = true;
-            restOpers = queue;
+            failedOpers = queue;
         }
 
         if (!needRetry) {
@@ -98,23 +116,70 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
             }
             for (const req of queue) {
                 if (successIds.includes(req.oper.id!)) {
-                    req.resolve();
+                    req.resolve(undefined);
                 }
                 else {
-                    restOpers.push(req);
+                    failedOpers.push(req);
                 }
             }
         }
 
-        if (restOpers.length > 0) {
-            const interval = Math.max(0, channel.nextPushTimestamp - Date.now());
-            const retry2 = needRetry ? (typeof retry === 'number' ? retry + 1 : 1) : undefined;
-            console.log('need retry', retry2);
-            setTimeout(() => this.pushOnChannel(remoteEntity, remoteEntityId, context, channel, retry2), interval);
+        channel.running = false;
+        channel.handler = undefined;
+        const retry2 = retry + 1;
+        console.log('need retry', retry2);
+        this.joinChannel(channel, failedOpers, retry2);
+    }
+
+    private joinChannel(channel: Channel<ED>, opers: {
+        oper: Partial<ED['oper']['Schema']>,
+        resolve: (value: unknown) => void,
+    }[], retry: number) {
+        // 要去重且有序
+        let idx = 0;
+        const now = Date.now();
+        opers.forEach(
+            (oper) => {
+                for (; idx < channel.queue.length; idx++) {
+                    if (channel.queue[idx].oper.id === oper.oper.id) {
+                        assert(false, '不应当出现重复的oper');
+                        break;
+                    }
+                    else if (channel.queue[idx].oper.bornAt! > oper.oper.bornAt!) {
+                        break;
+                    }
+                }
+                channel.queue.splice(idx, 0, oper);
+            }
+        );
+        const retryWeight = Math.pow(2, Math.min(retry, 10));
+        const nextPushTimestamp = retryWeight * 1000 + now;
+
+        if (channel.queue.length > 0) {
+            if (channel.running) {
+                if (channel.nextPushTimestamp > nextPushTimestamp) {
+                    channel.nextPushTimestamp = nextPushTimestamp;
+                }
+            }
+            else {
+                if (channel.nextPushTimestamp > nextPushTimestamp) {
+                    channel.nextPushTimestamp = nextPushTimestamp;
+                    if (channel.handler) {
+                        clearTimeout(channel.handler);
+                    }
+                    channel.handler = setTimeout(async () => {
+                        await this.startChannel(channel, retry);
+                    }, nextPushTimestamp - now);
+                }
+                else {
+                    // 当前队列的开始时间要早于自身要求，不用管
+                    assert(channel.handler);
+                }
+            }
         }
         else {
             channel.handler = undefined;
-            channel.nextPushTimestamp = undefined;
+            channel.nextPushTimestamp = Number.MAX_SAFE_INTEGER;
         }
     }
 
@@ -128,74 +193,164 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
      * 其实这里还无法严格保证先产生的oper一定先到达被推送，因为volatile trigger是在事务提交后再发生的，但这种情况在目前应该跑不出来，在实际执行oper的时候assert掉先。by Xc 20240226
      */
     private async pushOper(
-        context: Cxt,
         oper: Partial<ED['oper']['Schema']>,
         userId: string,
         url: string,
         endpoint: string,
         remoteEntity: keyof ED,
         remoteEntityId: string,
-        nextPushTimestamp?: number
+        selfEncryptInfo: SelfEncryptInfo,
     ) {
+
         if (!this.remotePushChannel[userId]) {
+            // channel上缓存这些信息，暂不支持动态更新
             this.remotePushChannel[userId] = {
                 api: join(url, 'endpoint', endpoint),
                 queue: [],
+                entity: remoteEntity,
+                entityId: remoteEntityId,
+                nextPushTimestamp: Number.MAX_SAFE_INTEGER,
+                running: false,
+                selfEncryptInfo,
             };
         }
         const channel = this.remotePushChannel[userId];
+        assert(channel.api === join(url, 'endpoint', endpoint));
+        assert(channel.entity === remoteEntity);
+        assert(channel.entityId === remoteEntityId);
 
-        // 要去重且有序
-        let existed = false;
-        let idx = 0;
-        for (; idx < channel.queue.length; idx++) {
-            if (channel.queue[idx].oper.id === oper.id) {
-                existed = true;
-                break;
+        const promise = new Promise(
+            (resolve) => {
+                this.joinChannel(channel, [{
+                    oper,
+                    resolve,
+                }], 0);
             }
-            else if (channel.queue[idx].oper.bornAt! > oper.bornAt!) {
-                break;
-            }
-        }
-        if (!existed) {
-            const now = Date.now();
-            const nextPushTimestamp2 = nextPushTimestamp || now + 1000;
-            const waiter = new Promise<void>(
-                (resolve, reject) => {
-                    if (!existed) {
-                        channel.queue.splice(idx, 0, {
-                            oper,
-                            resolve,
-                            reject,
-                        });
-                    }
-                }
-            );
-            if (!channel.handler) {
-                channel.nextPushTimestamp = nextPushTimestamp2;
-                channel.handler = setTimeout(async () => {
-                    await this.pushOnChannel(remoteEntity, remoteEntityId, context, channel);
-                }, nextPushTimestamp2 - now);
-            }
-            else if (channel.nextPushTimestamp && channel.nextPushTimestamp > nextPushTimestamp2) {
-                // 当前队列的开始时间要晚于自身的要求，要求提前开始
-                channel.nextPushTimestamp = nextPushTimestamp2;
-            }
+        );
 
-            await waiter;
-        }
-        else {
-            // 感觉应该跑不出来
-            console.warn('在sync数据时，遇到了重复推送的oper', JSON.stringify(oper), userId, url);
-        }
+        await promise;
     }
 
-    private async getSelfEncryptInfo(context: Cxt) {
-        if (this.selfEncryptInfo) {
-            return this.selfEncryptInfo;
+    /**
+     * 因为应用可能是多租户，得提前确定context下的selfEncryptInfo
+     * 由于checkpoint时无法区别不同上下文之间的未完成oper数据，所以接口只能这样设计
+     * @param id 
+     * @param context 
+     * @param selfEncryptInfo 
+     * @returns 
+     */
+    private async synchronizeOpersToRemote(id: string, context: Cxt, selfEncryptInfo: SelfEncryptInfo) {
+        const [oper] = await context.select('oper', {
+            data: {
+                id: 1,
+                action: 1,
+                data: 1,
+                targetEntity: 1,
+                operatorId: 1,
+                operEntity$oper: {
+                    $entity: 'operEntity',
+                    data: {
+                        id: 1,
+                        entity: 1,
+                        entityId: 1,
+                    },
+                },
+                bornAt: 1,
+                $$createAt$$: 1,
+                filter: 1,
+            },
+            filter: {
+                id,
+            }
+        }, { dontCollect: true, forUpdate: true });
+
+        const { operatorId, targetEntity, operEntity$oper: operEntities, action, data } = oper;
+        const entityIds = operEntities!.map(
+            ele => ele.entityId!
+        );
+
+        const pushEntityNodes = this.pushAccessMap[targetEntity!];
+        if (pushEntityNodes && pushEntityNodes.length > 0) {
+            // 每个pushEntityNode代表配置的一个remoteEntity 
+            await Promise.all(
+                pushEntityNodes.map(
+                    async (node) => {
+                        const { projection, groupByUsers, getRemotePushInfo: getRemoteAccessInfo, endpoint, actions, onSynchronized } = node;
+                        if (!actions || actions.includes(action!)) {
+                            const pushed = [] as Promise<void>[];
+                            const rows = await context.select(targetEntity!, {
+                                data: {
+                                    id: 1,
+                                    ...projection,
+                                },
+                                filter: {
+                                    id: {
+                                        $in: entityIds,
+                                    },
+                                },
+                            }, { dontCollect: true, includedDeleted: true });
+
+                            // userId就是需要发送给远端的user，但是要将本次操作的user过滤掉（操作的原本产生者）
+                            const userSendDict = groupByUsers(rows);
+                            const pushToUserIdFn = async (userId: string) => {
+                                const { entity, entityId, rowIds } = userSendDict[userId];
+                                // 推送到远端结点的oper
+                                const oper2 = {
+                                    id: oper.id!,
+                                    action: action!,
+                                    data: (action === 'create' && data instanceof Array) ? data.filter(ele => rowIds.includes(ele.id)) : data!,
+                                    filter: {
+                                        id: rowIds.length === 1 ? rowIds[0] : {
+                                            $in: rowIds,
+                                        }
+                                    },
+                                    bornAt: oper.bornAt!,
+                                    targetEntity,
+                                };
+                                const { url } = await getRemoteAccessInfo(context, {
+                                    userId,
+                                    remoteEntityId: entityId,
+                                });
+
+                                await this.pushOper(oper, userId, url, endpoint, entity, entityId, selfEncryptInfo);
+                            };
+                            for (const userId in userSendDict) {
+                                if (userId !== operatorId) {
+                                    pushed.push(pushToUserIdFn(userId));
+                                }
+                            }
+
+                            if (pushed.length > 0) {
+                                // 对单个oper，这里必须要等所有的push返回，不然会一直等在上面
+                                await Promise.all(pushed);
+                                if (onSynchronized) {
+                                    await onSynchronized({
+                                        action: action!,
+                                        data: data!,
+                                        rowIds: entityIds,
+                                    }, context);
+                                }
+                            }
+                        }
+                    }
+                )
+            );
+
+            // 到这里说明此oper成功，否则会在内部不停循环重试
+            // 主动去把oper上的跨事务标志清除，不依赖底层的triggerExecutor
+            await context.operate('oper', {
+                id: await generateNewIdAsync(),
+                action: 'update',
+                data: {
+                    [TriggerDataAttribute]: null,
+                    [TriggerUuidAttribute]: null,
+                },
+                filter: {
+                    id
+                },
+            }, {});
         }
-        this.selfEncryptInfo = await this.config.self.getSelfEncryptInfo(context);
-        return this.selfEncryptInfo!;
+        return 0;
     }
 
     private makeCreateOperTrigger() {
@@ -203,19 +358,6 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
         const { remotes, self } = config;
 
         // 根据remotes定义，建立从entity到需要同步的远端结点信息的Map
-        const pushAccessMap: Record<string, Array<{
-            projection: ED[keyof ED]['Selection']['data'];                                                       // 从entity上取到相关user需要的projection
-            groupByUsers: (row: Partial<ED[keyof ED]['Schema']>[]) => Record<string, {
-                entity: keyof ED;       // 对方目标对象
-                entityId: string;       // 对象目标对象Id
-                rowIds: string[];       // 要推送的rowId
-            }>;        // 根据相关数据行关联的userId，对行ID进行重分组，键值为userId
-            getRemotePushInfo: SyncConfig<ED, Cxt>['remotes'][number]['getPushInfo'];                            // 根据userId获得相应push远端的信息
-            endpoint: string;                                                                                    // 远端接收endpoint的url
-            actions?: string[];
-            onSynchronized: PushEntityDef<ED, keyof ED, Cxt>['onSynchronized'];
-            entity: keyof ED;
-        }>> = {};
         remotes.forEach(
             (remote) => {
                 const { getPushInfo, pushEntities: pushEntityDefs, endpoint, pathToUser, relationName: rnRemote } = remote;
@@ -270,8 +412,8 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                             return userRowDict;
                         };
 
-                        if (!pushAccessMap[entity as string]) {
-                            pushAccessMap[entity as string] = [{
+                        if (!this.pushAccessMap[entity as string]) {
+                            this.pushAccessMap[entity as string] = [{
                                 projection,
                                 groupByUsers,
                                 getRemotePushInfo: getPushInfo,
@@ -282,7 +424,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                             }];
                         }
                         else {
-                            pushAccessMap[entity as string].push({
+                            this.pushAccessMap[entity as string].push({
                                 projection,
                                 groupByUsers,
                                 getRemotePushInfo: getPushInfo,
@@ -297,7 +439,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
             }
         );
 
-        const pushEntities = Object.keys(pushAccessMap);
+        const pushEntities = Object.keys(this.pushAccessMap);
 
         // push相关联的entity，在发生操作时，需要将operation推送到远端
         const createOperTrigger: VolatileTrigger<ED, 'oper', Cxt> = {
@@ -312,106 +454,16 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
             },
             fn: async ({ ids }, context) => {
                 assert(ids.length === 1);
-                const [oper] = await context.select('oper', {
-                    data: {
-                        id: 1,
-                        action: 1,
-                        data: 1,
-                        targetEntity: 1,
-                        operatorId: 1,
-                        operEntity$oper: {
-                            $entity: 'operEntity',
-                            data: {
-                                id: 1,
-                                entity: 1,
-                                entityId: 1,
-                            },
-                        },
-                        bornAt: 1,
-                        $$createAt$$: 1,
-                    },
-                    filter: {
-                        id: ids[0],
-                    }
-                }, { dontCollect: true, forUpdate: true });
-                const { operatorId, targetEntity, operEntity$oper: operEntities, action, data } = oper;
-                const entityIds = operEntities!.map(
-                    ele => ele.entityId!
-                );
-
-                const pushEntityNodes = pushAccessMap[targetEntity!];
-                if (pushEntityNodes && pushEntityNodes.length > 0) {
-                    // 每个pushEntityNode代表配置的一个remoteEntity 
-                    await Promise.all(
-                        pushEntityNodes.map(
-                            async (node) => {
-                                const { projection, groupByUsers, getRemotePushInfo: getRemoteAccessInfo, endpoint, actions, onSynchronized } = node;
-                                if (!actions || actions.includes(action!)) {
-                                    const pushed = [] as Promise<void>[];
-                                    const rows = await context.select(targetEntity!, {
-                                        data: {
-                                            id: 1,
-                                            ...projection,
-                                        },
-                                        filter: {
-                                            id: {
-                                                $in: entityIds,
-                                            },
-                                        },
-                                    }, { dontCollect: true, includedDeleted: true });
-
-                                    // userId就是需要发送给远端的user，但是要将本次操作的user过滤掉（操作的原本产生者）
-                                    const userSendDict = groupByUsers(rows);
-                                    const pushToUserIdFn = async (userId: string) => {
-                                        const { entity, entityId, rowIds } = userSendDict[userId];
-                                        // 推送到远端结点的oper
-                                        const oper2 = {
-                                            id: oper.id!,
-                                            action: action!,
-                                            data: (action === 'create' && data instanceof Array) ? data.filter(ele => rowIds.includes(ele.id)) : data!,
-                                            filter: {
-                                                id: rowIds.length === 1 ? rowIds[0] : {
-                                                    $in: rowIds,
-                                                }
-                                            },
-                                            bornAt: oper.bornAt!,
-                                            targetEntity,
-                                        };
-                                        const { url } = await getRemoteAccessInfo(context, {
-                                            userId,
-                                            remoteEntityId: entityId,
-                                        });
-                                        await this.pushOper(context, oper2 as any /** 这里不明白为什么TS过不去 */, userId, url, endpoint, entity, entityId);
-                                    };
-                                    for (const userId in userSendDict) {
-                                        if (userId !== operatorId) {
-                                            pushed.push(pushToUserIdFn(userId));
-                                        }
-                                    }
-
-                                    if (pushed.length > 0) {
-                                        await Promise.all(pushed);
-                                        if (onSynchronized) {
-                                            await onSynchronized({
-                                                action: action!,
-                                                data: data!,
-                                                rowIds: entityIds,
-                                            }, context);
-                                        }
-                                    }
-                                }
-                            }
-                        )
-                    );
-
-                    return entityIds.length * pushEntityNodes.length;
-                }
-                return 0;
+                const selfEncryptInfo = await this.config.self.getSelfEncryptInfo(context);
+                this.synchronizeOpersToRemote(ids[0], context, selfEncryptInfo);
+                throw new OakException('consistency on oper will be managed by myself');
             }
         };
 
         return createOperTrigger;
     }
+
+
 
     constructor(config: SyncConfig<ED, Cxt>, schema: StorageSchema<ED>) {
         this.config = config;
@@ -424,6 +476,33 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
      */
     getSyncTriggers() {
         return [this.makeCreateOperTrigger()] as Array<VolatileTrigger<ED, keyof ED, Cxt>>;
+    }
+
+    getSyncRoutine(): Watcher<ED, keyof ED, Cxt> {
+        return {
+            name: 'checkpoint routine for sync',
+            entity: 'oper',
+            filter: {
+                [TriggerDataAttribute]: {
+                    $exists: true,
+                }
+            } as ED[keyof ED]['Selection']['filter'],
+            projection: {
+                id: 1,
+                [TriggerDataAttribute]: 1,
+            } as ED[keyof ED]['Selection']['data'],
+            fn: async (context, data) => {
+                for (const ele of data) {
+                    const { id, [TriggerDataAttribute]: triggerData } = ele;
+                    const { cxtStr = '{}' } = triggerData!;
+
+                    await context.initialize(JSON.parse(cxtStr), true);
+                    const selfEncryptInfo = await this.config.self.getSelfEncryptInfo(context);
+                    this.synchronizeOpersToRemote(id!, context, selfEncryptInfo);
+                }
+                return {};
+            }
+        };
     }
 
     getSelfEndpoint(): EndpointItem<ED, Cxt> {
@@ -476,8 +555,6 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                 if (cxtInfo) {
                     await context.initialize(cxtInfo);
                 }
-                const selfEncryptInfo = await this.getSelfEncryptInfo(context);
-                assert(selfEncryptInfo.id === meEntityId && meEntity === this.config.self.entity);
                 // todo 解密
 
                 if (!this.pullMaxBornAtMap.hasOwnProperty(entityId)) {
@@ -569,6 +646,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                                     maxBornAt = bornAt as number;
                                 }
                                 catch (err: any) {
+                                    console.error(err);
                                     console.error('sync时出错', entity, JSON.stringify(freshOper));
                                     failed = {
                                         id,
