@@ -2,7 +2,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { scheduleJob } from 'node-schedule';
 import { OAK_EXTERNAL_LIBS_FILEPATH } from 'oak-domain/lib/compiler/env';
-import { makeIntrinsicCTWs } from "oak-domain/lib/store/actionDef";
+import { makeIntrinsicCTWs } from "oak-domain/lib/store/IntrinsicLogics";
 import { intersection, omit } from 'oak-domain/lib/utils/lodash';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { generateNewIdAsync } from 'oak-domain/lib/utils/uuid';

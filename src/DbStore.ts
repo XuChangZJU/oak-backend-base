@@ -139,7 +139,7 @@ export class DbStore<ED extends EntityDict & BaseEntityDict, Cxt extends Backend
     }
 
     registerChecker<T extends keyof ED>(checker: Checker<ED, T, Cxt>) {
-        this.executor.registerChecker(checker);
+        this.executor.registerChecker(checker, this.getSchema());
     }
 
     setOnVolatileTrigger(
