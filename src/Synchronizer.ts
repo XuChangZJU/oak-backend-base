@@ -276,6 +276,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                 pushEntityNodes.map(
                     async (node) => {
                         const { projection, groupByUsers, getRemotePushInfo: getRemoteAccessInfo, endpoint, actions, onSynchronized } = node;
+                        // 定义中应该不可能没有actions
                         if (!actions || actions.includes(action!)) {
                             const pushed = [] as Promise<void>[];
                             const rows = await context.select(targetEntity!, {
@@ -449,8 +450,10 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
             when: 'commit',
             strict: 'makeSure',
             check: (operation: ED['oper']['Create']) => {
-                const { data } = operation;
-                return pushEntities.includes((<ED['oper']['CreateSingle']['data']>data).targetEntity!);
+                const { data } = operation as ED['oper']['CreateSingle'];
+                const { targetEntity, action } = data;
+                return pushEntities.includes((<ED['oper']['CreateSingle']['data']>data).targetEntity!)
+                    && !!this.pushAccessMap[targetEntity!].find(({ actions }) => !actions || actions.includes(action!));
             },
             fn: async ({ ids }, context) => {
                 assert(ids.length === 1);
