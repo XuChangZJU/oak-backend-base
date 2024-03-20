@@ -37,7 +37,6 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
         pullInfo: RemotePullInfo,
         pullEntityDict: Record<string, PullEntityDef<ED, keyof ED, Cxt>>;
     }>> = {};
-    private pullMaxBornAtMap: Record<string, number> = {};
     private remotePushChannel: Record<string, Channel<ED>> = {};
 
     private pushAccessMap: Record<string, Array<{
@@ -560,109 +559,60 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                 }
                 // todo 解密
 
-                if (!this.pullMaxBornAtMap.hasOwnProperty(entityId)) {
-                    const [maxHisOper] = await context.select('oper', {
-                        data: {
-                            id: 1,
-                            bornAt: 1,
-                        },
-                        filter: {
-                            operatorId: userId,
-                        },
-                        sorter: [
-                            {
-                                $attr: {
-                                    bornAt: 1,
-                                },
-                                $direction: 'desc',
-                            },
-                        ],
-                        indexFrom: 0,
-                        count: 1,
-                    }, { dontCollect: true });
-                    this.pullMaxBornAtMap[entityId] = maxHisOper?.bornAt as number || 0;
-                }
-
-                let maxBornAt = this.pullMaxBornAtMap[entityId]!;
+                // 当前无法保证顺序性，先不管顺序，只要推了就做
                 const opers = body as ED['oper']['Schema'][];
+                const existedId = (await context.select('oper', {
+                    data: {
+                        id: 1,
+                    },
+                    filter: {
+                        id: {
+                            $in: opers.map(ele => ele.id)!,
+                        }
+                    }
+                }, { dontCollect: true })).map(ele => ele.id);
 
-                const outdatedOpers = opers.filter(
-                    ele => ele.bornAt as number <= maxBornAt
-                );
                 const freshOpers = opers.filter(
-                    ele => ele.bornAt as number > maxBornAt
+                    ele => !existedId.includes(ele.id)
                 );
+                for (const freshOper of freshOpers) {
+                    // freshOpers是按bornAt序产生的
+                    const { id, targetEntity, action, data, bornAt, filter } = freshOper;
+                    const ids = getRelevantIds(filter!);
+                    assert(ids.length > 0);
 
-                await Promise.all(
-                    [
-                        // 无法严格保证推送按bornAt，所以一旦还有outdatedOpers，检查其已经被apply
-                        (async () => {
-                            const ids = outdatedOpers.map(
-                                ele => ele.id
-                            );
-                            if (ids.length > 0) {
-                                const opersExisted = await context.select('oper', {
-                                    data: {
-                                        id: 1,
-                                    },
-                                    filter: {
-                                        id: {
-                                            $in: ids!,
-                                        }
-                                    }
-                                }, { dontCollect: true });
-                                if (opersExisted.length < ids.length) {
-                                    const missed = difference(ids, opersExisted.map(ele => ele.id));
-                                    // todo 这里如果远端业务逻辑严格，发生乱序应是无关的oper，直接执行就好 by Xc
-                                    throw new Error(`在sync过程中发现有丢失的oper数据「${missed}」`);
-                                }
-                                successIds.push(...ids);
+                    try {
+                        if (pullEntityDict && pullEntityDict[targetEntity]) {
+                            const { process } = pullEntityDict[targetEntity];
+                            if (process) {
+                                await process(action!, data, context);
                             }
-                        })(),
-                        (async () => {
-                            for (const freshOper of freshOpers) {
-                                // freshOpers是按bornAt序产生的
-                                const { id, targetEntity, action, data, bornAt, filter } = freshOper;
-                                const ids = getRelevantIds(filter!);
-                                assert(ids.length > 0);
-
-                                try {
-                                    if (pullEntityDict && pullEntityDict[targetEntity]) {
-                                        const { process } = pullEntityDict[targetEntity];
-                                        if (process) {
-                                            await process(action!, data, context);
-                                        }
-                                    }
-                                    const operation: ED[keyof ED]['Operation'] = {
-                                        id,
-                                        data,
-                                        action,
-                                        filter: {
-                                            id: ids.length === 1 ? ids[0] : {
-                                                $in: ids,
-                                            },
-                                        },
-                                        bornAt: bornAt as number,
-                                    };
-                                    await context.operate(targetEntity, operation, {});
-                                    successIds.push(id);
-                                    maxBornAt = bornAt as number;
-                                }
-                                catch (err: any) {
-                                    console.error(err);
-                                    console.error('sync时出错', entity, JSON.stringify(freshOper));
-                                    failed = {
-                                        id,
-                                        error: err.toString(),
-                                    };
-                                    break;
-                                }
-                            }
-                        })()
-                    ]
-                );
-
-                this.pullMaxBornAtMap[entityId] = maxBornAt;
+                        }
+                        const operation: ED[keyof ED]['Operation'] = {
+                            id,
+                            data,
+                            action,
+                            filter: {
+                                id: ids.length === 1 ? ids[0] : {
+                                    $in: ids,
+                                },
+                            },
+                            bornAt: bornAt as number,
+                        };
+                        await context.operate(targetEntity, operation, {});
+                        successIds.push(id);
+                    }
+                    catch (err: any) {
+                        console.error(err);
+                        console.error('sync时出错', entity, JSON.stringify(freshOper));
+                        failed = {
+                            id,
+                            error: err.toString(),
+                        };
+                        break;
+                    }
+                }
+                
                 return {
                     successIds,
                     failed,

@@ -6,7 +6,6 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
     private config;
     private schema;
     private remotePullInfoMap;
-    private pullMaxBornAtMap;
     private remotePushChannel;
     private pushAccessMap;
     /**
