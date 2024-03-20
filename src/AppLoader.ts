@@ -26,7 +26,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
     private aspectDict: Record<string, Aspect<ED, Cxt>>;
     private externalDependencies: string[];
     protected dataSubscriber?: DataSubscriber<ED, Cxt>;
-    protected synchronizers?: Synchronizer<ED, Cxt>[];
+    protected synchronizer?: Synchronizer<ED, Cxt>;
     protected contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>;
 
     private requireSth(filePath: string): any {
@@ -130,7 +130,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
 
         return {
             dbConfig: dbConfig as MySQLConfiguration,
-            syncConfigs: syncConfigs as SyncConfig<ED, Cxt>[] | undefined,
+            syncConfig: syncConfigs as SyncConfig<ED, Cxt> | undefined,
         };
     }
 
@@ -201,26 +201,22 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             (checker) => this.dbStore.registerChecker(checker)
         );
 
-        if (this.synchronizers) {
-            // 同步数据到远端结点通过commit trigger来完成
-            for (const synchronizer of this.synchronizers) {
-                const syncTriggers = synchronizer.getSyncTriggers();
-                syncTriggers.forEach(
-                    (trigger) => this.registerTrigger(trigger)
-                );
-            }
+        if (this.synchronizer) {
+            // 同步数据到远端结点通过commit trigger来完成            
+            const syncTriggers = this.synchronizer.getSyncTriggers();
+            syncTriggers.forEach(
+                (trigger) => this.registerTrigger(trigger)
+            );
         }
     }
 
     async mount(initialize?: true) {
         const { path } = this;
         if (!initialize) {
-            const { syncConfigs } = this.getConfiguration();
+            const { syncConfig: syncConfig } = this.getConfiguration();
 
-            if (syncConfigs) {
-                this.synchronizers = syncConfigs.map(
-                    config => new Synchronizer(config, this.dbStore.getSchema())
-                );
+            if (syncConfig) {
+                this.synchronizer = new Synchronizer(syncConfig, this.dbStore.getSchema());
             }
 
             this.initTriggers();
@@ -352,13 +348,9 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             }
         }
 
-        if (this.synchronizers) {
-            this.synchronizers.forEach(
-                (synchronizer) => {
-                    const syncEp = synchronizer.getSelfEndpoint();
-                    transformEndpointItem(syncEp.name, syncEp);
-                }
-            );
+        if (this.synchronizer) {
+            const syncEp = this.synchronizer.getSelfEndpoint();
+            transformEndpointItem(syncEp.name, syncEp);
         }
         return endPointRouters;
     }
@@ -490,6 +482,10 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
 
     async execStartRoutines() {
         const routines: Routine<ED, keyof ED, Cxt>[] = this.requireSth('lib/routines/start');
+        if (this.synchronizer) {
+            const routine = this.synchronizer.getSyncRoutine();
+            routines.push(routine);
+        }
         for (const routine of routines) {
             if (routine.hasOwnProperty('entity')) {
                 const start = Date.now();
@@ -519,16 +515,6 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
                     throw err;
                 }
             }
-        }
-
-        if (this.synchronizers) {
-            this.synchronizers.forEach(
-                (synchronizer) => {
-                    // 这个routine在内部处理异步
-                    const routine = synchronizer.getSyncRoutine();
-                    this.execWatcher(routine);
-                }
-            );
         }
     }
 

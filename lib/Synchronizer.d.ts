@@ -1,4 +1,4 @@
-import { EntityDict, StorageSchema, EndpointItem, SyncConfig, Watcher } from 'oak-domain/lib/types';
+import { EntityDict, StorageSchema, EndpointItem, SyncConfig, FreeRoutine } from 'oak-domain/lib/types';
 import { VolatileTrigger } from 'oak-domain/lib/types/Trigger';
 import { EntityDict as BaseEntityDict } from 'oak-domain/lib/base-app-domain';
 import { BackendRuntimeContext } from 'oak-frontend-base/lib/context/BackendRuntimeContext';
@@ -6,7 +6,8 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
     private config;
     private schema;
     private remotePullInfoMap;
-    private remotePushChannel;
+    private pullMaxBornAtMap;
+    private channelDict;
     private pushAccessMap;
     /**
      * 向某一个远端对象push opers。根据幂等性，这里如果失败了必须反复推送
@@ -14,25 +15,15 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
      * @param retry
      */
     private startChannel;
-    private joinChannel;
+    private startAllChannel;
+    private pushOperToChannel;
+    private dispatchOperToChannels;
     /**
-     * 推向远端Node的oper，需要严格保证按产生的时间序推送。根据幂等原理，这里必须要推送成功
-     * 因此在这里要实现两点：
-     * 1）oper如果推送失败了，必须留存在queue中，以保证在后面产生的oper之前推送
-     * 2）当对queue中增加oper时，要检查是否有重（有重说明之前失败过），如果无重则将之放置在队列尾
-     *
-     * 其实这里还无法严格保证先产生的oper一定先到达被推送，因为volatile trigger是在事务提交后再发生的，但这种情况在目前应该跑不出来，在实际执行oper的时候assert掉先。by Xc 20240226
-     */
-    private pushOper;
-    /**
-     * 因为应用可能是多租户，得提前确定context下的selfEncryptInfo
-     * 由于checkpoint时无法区别不同上下文之间的未完成oper数据，所以接口只能这样设计
-     * @param id
+     * 为了保证推送的oper序，采用从database中顺序读取所有需要推送的oper来进行推送
+     * 每个进程都保证把当前所有的oper顺序处理掉，就不会有乱序的问题，大家通过database上的锁来完成同步
      * @param context
-     * @param selfEncryptInfo
-     * @returns
      */
-    private synchronizeOpersToRemote;
+    private trySynchronizeOpers;
     private makeCreateOperTrigger;
     constructor(config: SyncConfig<ED, Cxt>, schema: StorageSchema<ED>);
     /**
@@ -40,6 +31,6 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
      * @returns
      */
     getSyncTriggers(): VolatileTrigger<ED, keyof ED, Cxt>[];
-    getSyncRoutine(): Watcher<ED, keyof ED, Cxt>;
+    getSyncRoutine(): FreeRoutine<ED, Cxt>;
     getSelfEndpoint(): EndpointItem<ED, Cxt>;
 }

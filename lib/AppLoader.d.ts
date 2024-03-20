@@ -12,7 +12,7 @@ export declare class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt exten
     private aspectDict;
     private externalDependencies;
     protected dataSubscriber?: DataSubscriber<ED, Cxt>;
-    protected synchronizers?: Synchronizer<ED, Cxt>[];
+    protected synchronizer?: Synchronizer<ED, Cxt>;
     protected contextBuilder: (scene?: string) => (store: DbStore<ED, Cxt>) => Promise<Cxt>;
     private requireSth;
     protected makeContext(cxtStr?: string, headers?: IncomingHttpHeaders): Promise<Cxt>;
