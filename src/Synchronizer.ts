@@ -652,7 +652,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                 let maxBornAt = this.pullMaxBornAtMap[entityId]!;
                 const opers = body as ED['oper']['Schema'][];
 
-                const outdatedOpers = opers.filter(
+                const staleOpers = opers.filter(
                     ele => ele.$$seq$$ <= maxBornAt
                 );
                 const freshOpers = opers.filter(
@@ -663,7 +663,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                     [
                         // 无法严格保证推送按bornAt，所以一旦还有outdatedOpers，检查其已经被apply
                         (async () => {
-                            const ids = outdatedOpers.map(
+                            const ids = staleOpers.map(
                                 ele => ele.id
                             );
                             if (ids.length > 0) {
