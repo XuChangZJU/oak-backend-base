@@ -12,6 +12,7 @@ import { difference } from 'oak-domain/lib/utils/lodash';
 import { getRelevantIds } from 'oak-domain/lib/store/filter';
 import { generateNewIdAsync } from 'oak-domain/lib/utils/uuid';
 import { merge, uniq, unset } from 'lodash';
+import { DbStore } from './DbStore';
 
 const OAK_SYNC_HEADER_ENTITY = 'oak-sync-entity';
 const OAK_SYNC_HEADER_ENTITYID = 'oak-sync-entity-id';
@@ -37,6 +38,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
     }>> = {};
     private pullMaxBornAtMap: Record<string, number> = {};
     private channelDict: Record<string, Channel<ED, Cxt>> = {};
+    private contextBuilder: () => Promise<Cxt>;
 
     private pushAccessMap: Record<string, Array<{
         projection: ED[keyof ED]['Selection']['data'];                                                       // 从entity上取到相关user需要的projection
@@ -334,77 +336,88 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
      * 每个进程都保证把当前所有的oper顺序处理掉，就不会有乱序的问题，大家通过database上的锁来完成同步
      * @param context 
      */
-    private async trySynchronizeOpers(context: Cxt) {
-        let dirtyOpers = await context.select('oper', {
-            data: {
-                id: 1,
-            },
-            filter: {
-                [TriggerDataAttribute]: {
-                    $exists: true,
-                },
-            } as any
-        }, { dontCollect: true });
+    private async trySynchronizeOpers() {
+        const context = await this.contextBuilder();
+        await context.begin();
 
-        if (dirtyOpers.length > 0) {
-            // 这一步是加锁，保证只有一个进程完成推送，推送者提交前会将$$triggerData$$清零
-            const ids = dirtyOpers.map(ele => ele.id!);
-            dirtyOpers = await context.select('oper', {
+        try {
+            let dirtyOpers = await context.select('oper', {
                 data: {
                     id: 1,
-                    action: 1,
-                    data: 1,
-                    targetEntity: 1,
-                    operatorId: 1,
-                    [TriggerDataAttribute]: 1,
-                    bornAt: 1,
-                    $$createAt$$: 1,
-                    $$seq$$: 1,
-                    filter: 1,
                 },
                 filter: {
-                    id: { $in: ids },
-                },
-            }, { dontCollect: true, forUpdate: true });
-
-            dirtyOpers = dirtyOpers.filter(
-                ele => !!(ele as any)[TriggerDataAttribute]
-            );
+                    [TriggerDataAttribute]: {
+                        $exists: true,
+                    },
+                } as any
+            }, { dontCollect: true });
+    
             if (dirtyOpers.length > 0) {
-                const pushedIds = [] as string[];
-                const unpushedIds = [] as string[]; 
-                await Promise.all(
-                    dirtyOpers.map(
-                        async (oper) => {
-                            const result = await this.dispatchOperToChannels(oper, context);
-                            if (result) {
-                                pushedIds.push(oper.id!);
-                            }
-                            else {
-                                unpushedIds.push(oper.id!);
-                            }
-                        }
-                    )
+                // 这一步是加锁，保证只有一个进程完成推送，推送者提交前会将$$triggerData$$清零
+                const ids = dirtyOpers.map(ele => ele.id!);
+                dirtyOpers = await context.select('oper', {
+                    data: {
+                        id: 1,
+                        action: 1,
+                        data: 1,
+                        targetEntity: 1,
+                        operatorId: 1,
+                        [TriggerDataAttribute]: 1,
+                        bornAt: 1,
+                        $$createAt$$: 1,
+                        $$seq$$: 1,
+                        filter: 1,
+                    },
+                    filter: {
+                        id: { $in: ids },
+                    },
+                }, { dontCollect: true, forUpdate: true });
+    
+                dirtyOpers = dirtyOpers.filter(
+                    ele => !!(ele as any)[TriggerDataAttribute]
                 );
-                if (unpushedIds.length > 0) {
-                    await context.operate('oper', {
-                        id: await generateNewIdAsync(),
-                        action: 'update',
-                        data: {
-                            [TriggerDataAttribute]: null,
-                            [TriggerUuidAttribute]: null,
-                        },
-                        filter: {
-                            id: {
-                                $in: unpushedIds,
+                if (dirtyOpers.length > 0) {
+                    const pushedIds = [] as string[];
+                    const unpushedIds = [] as string[]; 
+                    await Promise.all(
+                        dirtyOpers.map(
+                            async (oper) => {
+                                const result = await this.dispatchOperToChannels(oper, context);
+                                if (result) {
+                                    pushedIds.push(oper.id!);
+                                }
+                                else {
+                                    unpushedIds.push(oper.id!);
+                                }
                             }
-                        }
-                    }, {});
-                }
-                if (pushedIds.length >0) {
-                    await this.startAllChannel(context);
+                        )
+                    );
+                    if (unpushedIds.length > 0) {
+                        await context.operate('oper', {
+                            id: await generateNewIdAsync(),
+                            action: 'update',
+                            data: {
+                                [TriggerDataAttribute]: null,
+                                [TriggerUuidAttribute]: null,
+                            },
+                            filter: {
+                                id: {
+                                    $in: unpushedIds,
+                                }
+                            }
+                        }, {});
+                    }
+                    if (pushedIds.length >0) {
+                        await this.startAllChannel(context);
+                    }
                 }
             }
+            await context.commit();
+        }
+        catch(err: any) {
+            await context.rollback();
+            console.error(err);
+            throw err;
         }
     }
 
@@ -536,9 +549,9 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                 return pushEntities.includes((<ED['oper']['CreateSingle']['data']>data).targetEntity!)
                     && !!this.pushAccessMap[targetEntity!].find(({ actions }) => !actions || actions.includes(action!));
             },
-            fn: async ({ ids }, context) => {
+            fn: async ({ ids }) => {
                 assert(ids.length === 1);
-                this.trySynchronizeOpers(context);
+                this.trySynchronizeOpers();
                 // 内部自主处理triggerData，因此不需要让triggerExecutor处理
                 throw new OakMakeSureByMySelfException();
             }
@@ -549,9 +562,10 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
 
 
 
-    constructor(config: SyncConfig<ED, Cxt>, schema: StorageSchema<ED>) {
+    constructor(config: SyncConfig<ED, Cxt>, schema: StorageSchema<ED>, contextBuilder: () => Promise<Cxt>) {
         this.config = config;
         this.schema = schema;
+        this.contextBuilder = contextBuilder;
     }
 
     /**
@@ -565,8 +579,8 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
     getSyncRoutine(): FreeRoutine<ED, Cxt> {
         return {
             name: 'checkpoint routine for sync',
-            routine: async (context) => {
-                this.trySynchronizeOpers(context);
+            routine: async () => {
+                this.trySynchronizeOpers();
                 return {};
             },
         };

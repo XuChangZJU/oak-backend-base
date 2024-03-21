@@ -216,7 +216,7 @@ export class AppLoader<ED extends EntityDict & BaseEntityDict, Cxt extends Backe
             const { syncConfig: syncConfig } = this.getConfiguration();
 
             if (syncConfig) {
-                this.synchronizer = new Synchronizer(syncConfig, this.dbStore.getSchema());
+                this.synchronizer = new Synchronizer(syncConfig, this.dbStore.getSchema(), () => this.contextBuilder()(this.dbStore));
             }
 
             this.initTriggers();

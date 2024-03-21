@@ -8,6 +8,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
     private remotePullInfoMap;
     private pullMaxBornAtMap;
     private channelDict;
+    private contextBuilder;
     private pushAccessMap;
     /**
      * 向某一个远端对象push opers。根据幂等性，这里如果失败了必须反复推送
@@ -26,7 +27,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
      */
     private trySynchronizeOpers;
     private makeCreateOperTrigger;
-    constructor(config: SyncConfig<ED, Cxt>, schema: StorageSchema<ED>);
+    constructor(config: SyncConfig<ED, Cxt>, schema: StorageSchema<ED>, contextBuilder: () => Promise<Cxt>);
     /**
      * 根据sync的定义，生成对应的 commit triggers
      * @returns
