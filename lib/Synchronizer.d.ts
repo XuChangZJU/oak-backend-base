@@ -17,6 +17,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
     private startChannel;
     private startAllChannel;
     private pushOperToChannel;
+    private refineOperData;
     private dispatchOperToChannels;
     /**
      * 为了保证推送的oper序，采用从database中顺序读取所有需要推送的oper来进行推送

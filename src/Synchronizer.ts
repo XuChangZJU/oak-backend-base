@@ -11,7 +11,7 @@ import { join } from 'path';
 import { difference } from 'oak-domain/lib/utils/lodash';
 import { getRelevantIds } from 'oak-domain/lib/store/filter';
 import { generateNewIdAsync } from 'oak-domain/lib/utils/uuid';
-import { merge, uniq } from 'lodash';
+import { merge, uniq, unset } from 'lodash';
 
 const OAK_SYNC_HEADER_ENTITY = 'oak-sync-entity';
 const OAK_SYNC_HEADER_ENTITYID = 'oak-sync-entity-id';
@@ -129,7 +129,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
             }
         }
 
-        const overIds = difference(successIds, aliveOperIds);
+        const overIds = difference(successIds.concat(redundantIds), aliveOperIds);
         if (overIds.length > 0) {
             await context.operate('oper', {
                 id: await generateNewIdAsync(),
@@ -236,6 +236,29 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
         });
     }
 
+    private refineOperData(oper: Partial<ED['oper']['OpSchema']>, rowIds: string[]) {
+        const { action, id, targetEntity, data, $$seq$$, filter } = oper;
+
+        const data2 = (action === 'create' && data instanceof Array) ? data.filter(ele => rowIds.includes(ele.id)) : data!;
+        // 过滤掉数据中的跨事务trigger信息
+        if (data2 instanceof Array) {
+            data2.forEach(
+                (d) => {
+                    unset(d, TriggerDataAttribute);
+                    unset(d, TriggerUuidAttribute);
+                }
+            );
+        }
+        else {
+            unset(data2, TriggerDataAttribute);
+            unset(data2, TriggerUuidAttribute);
+        }
+
+        return {
+            id, action, targetEntity, data: data2, $$seq$$, filter,
+        } as Partial<ED['oper']['OpSchema']>;
+    }
+
     private async dispatchOperToChannels(oper: Partial<ED['oper']['Schema']>, context: Cxt) {
         const { operatorId, targetEntity, filter, action, data } = oper;
         const entityIds = getRelevantIds(filter!);
@@ -281,18 +304,7 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                                 }
                                 const selfEncryptInfo = encryptInfoDict[selfEntityId]!;
                                 // 推送到远端结点的oper
-                                const oper2 = {
-                                    id: oper.id!,
-                                    action: action!,
-                                    data: (action === 'create' && data instanceof Array) ? data.filter(ele => rowIds.includes(ele.id)) : data!,
-                                    filter: {
-                                        id: rowIds.length === 1 ? rowIds[0] : {
-                                            $in: rowIds,
-                                        }
-                                    } as Object,
-                                    $$seq$$: oper.$$seq$$,       // 在多结点集群情况下，只有seq才能保证顺序
-                                    targetEntity,
-                                } as Partial<ED['oper']['OpSchema']>;
+                                const oper2 = this.refineOperData(oper, rowIds);
                                 const { url } = await getRemoteAccessInfo(context, {
                                     userId,
                                     remoteEntityId: entityId,
