@@ -36,7 +36,6 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
         pullInfo: RemotePullInfo,
         pullEntityDict: Record<string, PullEntityDef<ED, keyof ED, Cxt>>;
     }>> = {};
-    private pullMaxBornAtMap: Record<string, number> = {};
     private channelDict: Record<string, Channel<ED, Cxt>> = {};
     private contextBuilder: () => Promise<Cxt>;
 
@@ -640,38 +639,35 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                 }
                 // todo 解密
 
-                if (!this.pullMaxBornAtMap.hasOwnProperty(entityId)) {
-                    const [maxHisOper] = await context.select('oper', {
-                        data: {
-                            id: 1,
-                            bornAt: 1,
-                        },
-                        filter: {
-                            operatorId: userId,
-                        },
-                        sorter: [
-                            {
-                                $attr: {
-                                    bornAt: 1,
-                                },
-                                $direction: 'desc',
-                            },
-                        ],
-                        indexFrom: 0,
-                        count: 1,
-                    }, { dontCollect: true });
-                    this.pullMaxBornAtMap[entityId] = maxHisOper?.bornAt as number || 0;
-                }
-
-                let maxBornAt = this.pullMaxBornAtMap[entityId]!;
                 const opers = body as ED['oper']['Schema'][];
 
+                const ids = opers.map(ele => ele.id!);
+
+                const existeIds = (await context.select('oper', {
+                    data: {
+                        id: 1,                        
+                    },
+                    filter: {
+                        id: {
+                            $in: ids,
+                        },
+                    }
+                }, {})).map(ele => ele.id!);
+
                 const staleOpers = opers.filter(
-                    ele => ele.$$seq$$ <= maxBornAt
+                    ele => existeIds.includes(ele.id)
                 );
                 const freshOpers = opers.filter(
-                    ele => ele.$$seq$$ as number > maxBornAt
+                    ele => !existeIds.includes(ele.id)
                 );
+
+                if (process.env.NODE_ENV !== 'production') {
+                    const maxStaleSeq = Math.max(...staleOpers.map(ele => ele.$$seq$$!));
+
+                    for (const oper of freshOpers) {
+                        assert(oper.$$seq$$ > maxStaleSeq, '发现了seq没有按序进行同步');
+                    }
+                }
 
                 await Promise.all(
                     [
@@ -726,7 +722,6 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                                     };
                                     await context.operate(targetEntity, operation, {});
                                     successIds.push(id);
-                                    maxBornAt = $$seq$$;
                                 }
                                 catch (err: any) {
                                     console.error(err);
@@ -742,7 +737,6 @@ export default class Synchronizer<ED extends EntityDict & BaseEntityDict, Cxt ex
                     ]
                 );
 
-                this.pullMaxBornAtMap[entityId] = maxBornAt;
                 return {
                     successIds,
                     failed,
